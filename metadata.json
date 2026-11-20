@@ -1,0 +1,11 @@
+{
+  "name": "PRIMESTOCK BMS UG",
+  "description": "Enterprise-grade, offline-first Business Management System designed for Ugandan businesses. Manage sales, inventory, payroll, and URA tax compliance.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

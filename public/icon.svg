@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="116" fill="#0A2540" />
+  <rect x="44" y="44" width="424" height="424" rx="88" stroke="#00C37F" stroke-opacity="0.28" stroke-width="12" />
+  <path
+    d="M256 108L388 184V328L256 404L124 328V184L256 108Z"
+    fill="#103152"
+    stroke="#FFFFFF"
+    stroke-opacity="0.22"
+    stroke-width="10"
+  />
+  <path
+    d="M256 108L388 184L256 260L124 184L256 108Z"
+    fill="#00C37F"
+  />
+  <path
+    d="M174 284V212L256 260V356L174 308V284Z"
+    fill="#FFFFFF"
+  />
+  <path
+    d="M338 228L276 264V352L338 316V228Z"
+    fill="#00C37F"
+    fill-opacity="0.82"
+  />
+  <path
+    d="M196 184L256 149L316 184L256 219L196 184Z"
+    fill="#0A2540"
+    fill-opacity="0.24"
+  />
+</svg>

@@ -1,0 +1,992 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isBootstrapAdmin() {
+      return isAuthenticated() &&
+        request.auth.token.email == "davidmagero22@gmail.com" &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isMasterAdmin() {
+      return isBootstrapAdmin() ||
+        (isAuthenticated() &&
+         request.auth.token.email_verified == true &&
+         exists(/databases/$(database)/documents/masterAdmins/$(request.auth.uid)));
+    }
+
+    function userExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function tenantDocData(tenantId) {
+      return get(/databases/$(database)/documents/tenants/$(tenantId)).data;
+    }
+
+    function belongsToTenant(tenantId) {
+      return isAuthenticated() &&
+        isValidId(tenantId) &&
+        userExists() &&
+        userData().tenantId == tenantId &&
+        userData().status == 'active';
+    }
+
+    function tenantNotSuspended(tenantId) {
+      return tenantDocData(tenantId).status in ['active', 'trial'] &&
+        (!('locked' in tenantDocData(tenantId)) || tenantDocData(tenantId).locked != true);
+    }
+
+    function userHasSection(section) {
+      return 'allowedSections' in userData() &&
+        userData().allowedSections is list &&
+        userData().allowedSections.hasAny([section]);
+    }
+
+    function isTenantAdmin(tenantId) {
+      return belongsToTenant(tenantId) && userData().role == 'admin';
+    }
+
+    function isTenantManagerOrAdmin(tenantId) {
+      return belongsToTenant(tenantId) && userData().role in ['admin', 'manager'];
+    }
+
+    function canManageInventory(tenantId) {
+      return belongsToTenant(tenantId) &&
+        (userData().role in ['admin', 'manager', 'inventory'] ||
+         userHasSection('inventory') ||
+         userHasSection('purchases'));
+    }
+
+    function canAccessFinance(tenantId) {
+      return belongsToTenant(tenantId) &&
+        (userData().role in ['admin', 'manager', 'accountant'] ||
+         userHasSection('finance') ||
+         userHasSection('payroll'));
+    }
+
+    function authEmailLower() {
+      return 'email' in request.auth.token && request.auth.token.email is string
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    function isValidRole(role) {
+      return role in ['admin', 'manager', 'cashier', 'accountant', 'inventory'];
+    }
+
+    function isValidSectionsList(sections) {
+      return sections is list &&
+        sections.size() >= 1 &&
+        sections.size() <= 15 &&
+        sections.hasOnly([
+          'dashboard', 'pos', 'sales', 'inventory', 'purchases',
+          'customers', 'suppliers', 'finance', 'payroll', 'reports',
+          'shifts', 'ai', 'team', 'billing', 'settings'
+        ]);
+    }
+
+    function isValidEmailHash(hash) {
+      return hash is string && hash.matches('^[a-f0-9]{64}$');
+    }
+
+    function isValidEmailRegistry(data, emailHash) {
+      return data.keys().hasAll(['hash', 'tenantId', 'type', 'createdAt']) &&
+        data.keys().hasOnly(['hash', 'tenantId', 'type', 'createdAt']) &&
+        data.hash == emailHash &&
+        isValidEmailHash(data.hash) &&
+        isValidId(data.tenantId) &&
+        data.type in ['account', 'invite'] &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64;
+    }
+
+    // ===============================================================
+    // Validation Helpers
+    // ===============================================================
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'name', 'email', 'role', 'tenantId', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'name', 'email', 'phone', 'role', 'allowedSections', 'tenantId', 'branchId', 'inviteId', 'status', 'createdAt']) &&
+        isValidId(data.uid) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() <= 254 &&
+        isValidRole(data.role) &&
+        (!('allowedSections' in data) || isValidSectionsList(data.allowedSections)) &&
+        isValidId(data.tenantId) &&
+        data.status in ['active', 'inactive'] &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
+        (!('inviteId' in data) || isValidId(data.inviteId));
+    }
+
+    function isValidTenantMember(data, tenantId) {
+      return data.keys().hasAll(['uid', 'tenantId', 'name', 'email', 'role', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'tenantId', 'name', 'email', 'phone', 'role', 'allowedSections', 'branchId', 'baseSalaryUgx', 'nssfNumber', 'tinNumber', 'status', 'createdAt']) &&
+        isValidId(data.uid) &&
+        data.tenantId == tenantId &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() <= 254 &&
+        isValidRole(data.role) &&
+        (!('allowedSections' in data) || isValidSectionsList(data.allowedSections)) &&
+        data.status in ['active', 'inactive'] &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
+        (!('baseSalaryUgx' in data) || (data.baseSalaryUgx is number && data.baseSalaryUgx >= 0)) &&
+        (!('nssfNumber' in data) || (data.nssfNumber is string && data.nssfNumber.size() <= 64)) &&
+        (!('tinNumber' in data) || (data.tinNumber is string && data.tinNumber.size() <= 64));
+    }
+
+    function isValidStaffInvite(data) {
+      return data.keys().hasAll(['id', 'tenantId', 'tenantName', 'email', 'name', 'role', 'status', 'invitedBy', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'tenantName', 'email', 'name', 'role', 'allowedSections', 'branchId', 'status', 'invitedBy', 'createdAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.tenantId) &&
+        data.tenantName is string && data.tenantName.size() >= 1 && data.tenantName.size() <= 150 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        isValidRole(data.role) &&
+        (!('allowedSections' in data) || isValidSectionsList(data.allowedSections)) &&
+        data.status in ['pending', 'accepted', 'revoked'] &&
+        isValidId(data.invitedBy) &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128));
+    }
+
+    function isValidTenant(data) {
+      return data.keys().hasAll(['id', 'name', 'plan', 'status', 'trialEndsAt', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'name', 'logo', 'tin', 'ownerEmail', 'ownerName', 'ownerPhone',
+          'plan', 'status', 'trialEndsAt', 'subscribedAt', 'subscriptionEndsAt', 'locked',
+          'isComplimentary', 'complimentaryNote', 'customPriceUgx', 'disabledReason',
+          'autoRemindersEnabled', 'lastAutoReminderAt',
+          'pendingPlan', 'pendingAmountUgx', 'pendingPaymentMethod', 'pendingPaymentRef',
+          'pendingTransactionId', 'pendingPayerPhone', 'pendingInvoiceId', 'pendingSubmittedAt',
+          'approvedBy', 'approvedAt',
+          'lastReminderAt', 'lastReminderMessage', 'lastReminderChannel',
+          'createdAt', 'branding', 'preferences', 'billingPaymentMethods'
+        ]) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 150 &&
+        data.plan in ['micro', 'starter', 'business', 'enterprise'] &&
+        data.status in ['active', 'suspended', 'trial', 'pending_approval'] &&
+        data.trialEndsAt is string && data.trialEndsAt.size() > 0 && data.trialEndsAt.size() <= 64 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('tin' in data) || (data.tin is string && data.tin.size() <= 50)) &&
+        (!('logo' in data) || (data.logo is string && data.logo.size() <= 60000)) &&
+        (!('ownerEmail' in data) || (data.ownerEmail is string && data.ownerEmail.size() <= 254)) &&
+        (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 120)) &&
+        (!('ownerPhone' in data) || (data.ownerPhone is string && data.ownerPhone.size() <= 30)) &&
+        (!('subscribedAt' in data) || (data.subscribedAt is string && data.subscribedAt.size() <= 64)) &&
+        (!('subscriptionEndsAt' in data) || (data.subscriptionEndsAt is string && data.subscriptionEndsAt.size() <= 64)) &&
+        (!('locked' in data) || data.locked is bool) &&
+        (!('isComplimentary' in data) || data.isComplimentary is bool) &&
+        (!('complimentaryNote' in data) || (data.complimentaryNote is string && data.complimentaryNote.size() <= 200)) &&
+        (!('customPriceUgx' in data) || (data.customPriceUgx is number && data.customPriceUgx >= 0)) &&
+        (!('disabledReason' in data) || (data.disabledReason is string && data.disabledReason.size() <= 300)) &&
+        (!('autoRemindersEnabled' in data) || data.autoRemindersEnabled is bool) &&
+        (!('lastAutoReminderAt' in data) || (data.lastAutoReminderAt is string && data.lastAutoReminderAt.size() <= 64)) &&
+        (!('pendingPlan' in data) || data.pendingPlan in ['micro', 'starter', 'business', 'enterprise']) &&
+        (!('pendingAmountUgx' in data) || (data.pendingAmountUgx is number && data.pendingAmountUgx >= 0)) &&
+        (!('pendingPaymentMethod' in data) || (data.pendingPaymentMethod is string && data.pendingPaymentMethod.size() <= 100)) &&
+        (!('pendingPaymentRef' in data) || (data.pendingPaymentRef is string && data.pendingPaymentRef.size() <= 128)) &&
+        (!('pendingTransactionId' in data) || (data.pendingTransactionId is string && data.pendingTransactionId.size() <= 128)) &&
+        (!('pendingPayerPhone' in data) || (data.pendingPayerPhone is string && data.pendingPayerPhone.size() <= 30)) &&
+        (!('pendingInvoiceId' in data) || (data.pendingInvoiceId is string && data.pendingInvoiceId.size() <= 128)) &&
+        (!('pendingSubmittedAt' in data) || (data.pendingSubmittedAt is string && data.pendingSubmittedAt.size() <= 64)) &&
+        (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 128)) &&
+        (!('approvedAt' in data) || (data.approvedAt is string && data.approvedAt.size() <= 64)) &&
+        (!('lastReminderAt' in data) || (data.lastReminderAt is string && data.lastReminderAt.size() <= 64)) &&
+        (!('lastReminderMessage' in data) || (data.lastReminderMessage is string && data.lastReminderMessage.size() <= 500)) &&
+        (!('lastReminderChannel' in data) || (data.lastReminderChannel is string && data.lastReminderChannel.size() <= 40)) &&
+        (!('branding' in data) || (data.branding is map && data.branding.keys().size() <= 15)) &&
+        (!('preferences' in data) || (data.preferences is map && data.preferences.keys().size() <= 25)) &&
+        (!('billingPaymentMethods' in data) || (data.billingPaymentMethods is list && data.billingPaymentMethods.size() <= 10));
+    }
+
+    function isValidBranch(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'name', 'location', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'name', 'location', 'phone', 'isDefault', 'status', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.location is string && data.location.size() >= 1 && data.location.size() <= 200 &&
+        data.status in ['active', 'inactive'] &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+        (!('isDefault' in data) || data.isDefault is bool);
+    }
+
+    function isValidProduct(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'name', 'sellingPrice', 'currentStock', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'name', 'sku', 'barcode', 'categoryId', 'category', 'buyingPrice', 'sellingPrice', 'wholesalePrice', 'vipPrice', 'currentStock', 'branchStock', 'minStockLevel', 'unit', 'batchNumber', 'expiryDate', 'status', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 150 &&
+        data.sellingPrice is number && data.sellingPrice >= 0 &&
+        data.currentStock is number &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('sku' in data) || (data.sku is string && data.sku.size() <= 64)) &&
+        (!('barcode' in data) || (data.barcode is string && data.barcode.size() <= 64)) &&
+        (!('categoryId' in data) || (data.categoryId is string && data.categoryId.size() <= 128)) &&
+        (!('category' in data) || (data.category is string && data.category.size() <= 80)) &&
+        (!('buyingPrice' in data) || (data.buyingPrice is number && data.buyingPrice >= 0)) &&
+        (!('wholesalePrice' in data) || (data.wholesalePrice is number && data.wholesalePrice >= 0)) &&
+        (!('vipPrice' in data) || (data.vipPrice is number && data.vipPrice >= 0)) &&
+        (!('branchStock' in data) || (data.branchStock is map && data.branchStock.keys().size() <= 50)) &&
+        (!('minStockLevel' in data) || (data.minStockLevel is number && data.minStockLevel >= 0)) &&
+        (!('unit' in data) || (data.unit is string && data.unit.size() <= 32)) &&
+        (!('batchNumber' in data) || (data.batchNumber is string && data.batchNumber.size() <= 64)) &&
+        (!('expiryDate' in data) || (data.expiryDate is string && data.expiryDate.size() <= 32)) &&
+        (!('status' in data) || data.status in ['active', 'inactive']);
+    }
+
+    function isValidSale(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'total', 'paymentMethod', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'branchName', 'shiftId', 'reference', 'customerId', 'userId', 'items', 'subtotal', 'discount', 'taxAmount', 'taxRate', 'total', 'paymentMethod', 'paymentProvider', 'paymentReference', 'payerPhone', 'cashTendered', 'changeGiven', 'splitPayments', 'status', 'refundedAt', 'refundReason', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.total is number && data.total >= 0 &&
+        data.paymentMethod is string && data.paymentMethod.size() >= 1 && data.paymentMethod.size() <= 64 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('paymentProvider' in data) || (data.paymentProvider is string && data.paymentProvider.size() <= 40)) &&
+        (!('paymentReference' in data) || (data.paymentReference is string && data.paymentReference.size() <= 128)) &&
+        (!('payerPhone' in data) || (data.payerPhone is string && data.payerPhone.size() <= 30)) &&
+        (!('cashTendered' in data) || (data.cashTendered is number && data.cashTendered >= 0)) &&
+        (!('changeGiven' in data) || (data.changeGiven is number && data.changeGiven >= 0)) &&
+        (!('userId' in data) || isValidId(data.userId)) &&
+        (!('customerId' in data) || (data.customerId is string && data.customerId.size() <= 128)) &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
+        (!('branchName' in data) || (data.branchName is string && data.branchName.size() <= 120)) &&
+        (!('shiftId' in data) || (data.shiftId is string && data.shiftId.size() <= 128)) &&
+        (!('reference' in data) || (data.reference is string && data.reference.size() <= 64)) &&
+        (!('items' in data) || (data.items is list && data.items.size() <= 200)) &&
+        (!('splitPayments' in data) || (data.splitPayments is list && data.splitPayments.size() <= 10)) &&
+        (!('subtotal' in data) || (data.subtotal is number && data.subtotal >= 0)) &&
+        (!('discount' in data) || (data.discount is number && data.discount >= 0)) &&
+        (!('taxAmount' in data) || (data.taxAmount is number && data.taxAmount >= 0)) &&
+        (!('taxRate' in data) || (data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 100)) &&
+        (!('status' in data) || data.status in ['completed', 'pending', 'refunded']) &&
+        (!('refundedAt' in data) || (data.refundedAt is string && data.refundedAt.size() <= 64)) &&
+        (!('refundReason' in data) || (data.refundReason is string && data.refundReason.size() <= 300));
+    }
+
+    function isValidShift(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'userId', 'userName', 'openingFloat', 'expectedCash', 'status', 'openedAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'userId', 'userName', 'openingFloat', 'expectedCash', 'closingCash', 'variance', 'cashSales', 'mobileMoneySales', 'cardSales', 'creditSales', 'salesCount', 'status', 'openedAt', 'closedAt', 'notes']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        isValidId(data.userId) &&
+        data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120 &&
+        data.openingFloat is number && data.openingFloat >= 0 &&
+        data.expectedCash is number &&
+        data.status in ['open', 'closed'] &&
+        data.openedAt is string && data.openedAt.size() > 0 && data.openedAt.size() <= 64 &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
+        (!('closingCash' in data) || data.closingCash is number) &&
+        (!('variance' in data) || data.variance is number) &&
+        (!('cashSales' in data) || data.cashSales is number) &&
+        (!('mobileMoneySales' in data) || data.mobileMoneySales is number) &&
+        (!('cardSales' in data) || data.cardSales is number) &&
+        (!('creditSales' in data) || data.creditSales is number) &&
+        (!('salesCount' in data) || data.salesCount is number) &&
+        (!('closedAt' in data) || (data.closedAt is string && data.closedAt.size() <= 64)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 300));
+    }
+
+    function isValidPurchaseOrder(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'reference', 'supplierId', 'supplierName', 'items', 'totalAmount', 'paidAmount', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'reference', 'supplierId', 'supplierName', 'items', 'totalAmount', 'paidAmount', 'status', 'expectedDate', 'receivedAt', 'notes', 'createdBy', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.reference is string && data.reference.size() >= 1 && data.reference.size() <= 64 &&
+        isValidId(data.supplierId) &&
+        data.supplierName is string && data.supplierName.size() >= 1 && data.supplierName.size() <= 150 &&
+        data.items is list && data.items.size() > 0 && data.items.size() <= 200 &&
+        data.totalAmount is number && data.totalAmount >= 0 &&
+        data.paidAmount is number && data.paidAmount >= 0 &&
+        data.status in ['ordered', 'received', 'cancelled'] &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
+        (!('expectedDate' in data) || (data.expectedDate is string && data.expectedDate.size() <= 64)) &&
+        (!('receivedAt' in data) || (data.receivedAt is string && data.receivedAt.size() <= 64)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+        (!('createdBy' in data) || isValidId(data.createdBy));
+    }
+
+    function isValidCreditPayment(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'partyType', 'partyId', 'partyName', 'amount', 'paymentMethod', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'partyType', 'partyId', 'partyName', 'amount', 'paymentMethod', 'reference', 'notes', 'recordedBy', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.partyType in ['customer', 'supplier'] &&
+        isValidId(data.partyId) &&
+        data.partyName is string && data.partyName.size() >= 1 && data.partyName.size() <= 150 &&
+        data.amount is number && data.amount > 0 &&
+        data.paymentMethod is string && data.paymentMethod.size() >= 1 && data.paymentMethod.size() <= 64 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('reference' in data) || (data.reference is string && data.reference.size() <= 100)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+        (!('recordedBy' in data) || isValidId(data.recordedBy));
+    }
+
+    function isValidSupplier(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'name', 'phone', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'name', 'contactPerson', 'phone', 'email', 'address', 'category', 'currentBalance', 'status', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 150 &&
+        data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 30 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('contactPerson' in data) || (data.contactPerson is string && data.contactPerson.size() <= 120)) &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 254)) &&
+        (!('address' in data) || (data.address is string && data.address.size() <= 250)) &&
+        (!('category' in data) || (data.category is string && data.category.size() <= 80)) &&
+        (!('currentBalance' in data) || data.currentBalance is number) &&
+        (!('status' in data) || data.status in ['active', 'inactive']);
+    }
+
+    function isValidCustomer(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'name', 'phone', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'name', 'phone', 'email', 'address', 'type', 'creditLimit', 'currentBalance', 'loyaltyPoints', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 150 &&
+        data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 30 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 254)) &&
+        (!('address' in data) || (data.address is string && data.address.size() <= 250)) &&
+        (!('type' in data) || data.type in ['Individual', 'Business', 'Wholesale', 'VIP']) &&
+        (!('creditLimit' in data) || (data.creditLimit is number && data.creditLimit >= 0)) &&
+        (!('currentBalance' in data) || (data.currentBalance is number)) &&
+        (!('loyaltyPoints' in data) || (data.loyaltyPoints is number && data.loyaltyPoints >= 0));
+    }
+
+    function isValidExpense(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'amount', 'category', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'category', 'description', 'amount', 'paymentMethod', 'expenseDate', 'recordedBy', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.amount is number && data.amount > 0 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
+        (!('description' in data) || (data.description is string && data.description.size() <= 300)) &&
+        (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod.size() <= 64)) &&
+        (!('expenseDate' in data) || (data.expenseDate is string && data.expenseDate.size() <= 64)) &&
+        (!('recordedBy' in data) || isValidId(data.recordedBy));
+    }
+
+    function isValidBillingHistory(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'amount', 'status', 'reference', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'plan', 'amount', 'paymentMethod', 'provider', 'payerPhone', 'status', 'reference', 'reviewedBy', 'reviewedAt', 'rejectionReason', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.amount is number && data.amount >= 0 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 32 &&
+        data.reference is string && data.reference.size() >= 3 && data.reference.size() <= 128 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('plan' in data) || (data.plan is string && data.plan.size() <= 40)) &&
+        (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod.size() <= 64)) &&
+        (!('provider' in data) || (data.provider is string && data.provider.size() <= 40)) &&
+        (!('payerPhone' in data) || (data.payerPhone is string && data.payerPhone.size() <= 30)) &&
+        (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 128)) &&
+        (!('reviewedAt' in data) || (data.reviewedAt is string && data.reviewedAt.size() <= 64)) &&
+        (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 300));
+    }
+
+    function isValidReminder(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'message', 'channel', 'sentBy', 'sentByEmail', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'message', 'channel', 'sentBy', 'sentByEmail', 'acknowledged', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 500 &&
+        data.channel in ['in_app', 'email', 'whatsapp'] &&
+        isValidId(data.sentBy) &&
+        data.sentByEmail is string && data.sentByEmail.size() <= 254 &&
+        (!('acknowledged' in data) || data.acknowledged is bool) &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64;
+    }
+
+    function isValidAppNotification(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'title', 'message', 'category', 'severity', 'read', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'title', 'message', 'category', 'severity', 'read', 'actionRoute', 'channel', 'createdAt', 'readAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 500 &&
+        data.category in ['billing', 'stock', 'expiry', 'system', 'whatsapp'] &&
+        data.severity in ['info', 'warning', 'critical'] &&
+        data.read is bool &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('actionRoute' in data) || (data.actionRoute is string && data.actionRoute.size() <= 120)) &&
+        (!('channel' in data) || (data.channel is string && data.channel.size() <= 40)) &&
+        (!('readAt' in data) || (data.readAt is string && data.readAt.size() <= 64));
+    }
+
+    function isValidStockTransfer(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'productId', 'productName', 'fromBranchId', 'fromBranchName', 'toBranchId', 'toBranchName', 'quantity', 'status', 'transferredBy', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'productId', 'productName', 'fromBranchId', 'fromBranchName', 'toBranchId', 'toBranchName', 'quantity', 'notes', 'status', 'transferredBy', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        isValidId(data.productId) &&
+        data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
+        isValidId(data.fromBranchId) &&
+        isValidId(data.toBranchId) &&
+        data.fromBranchId != data.toBranchId &&
+        data.fromBranchName is string && data.fromBranchName.size() <= 120 &&
+        data.toBranchName is string && data.toBranchName.size() <= 120 &&
+        data.quantity is number && data.quantity > 0 &&
+        data.status == 'completed' &&
+        isValidId(data.transferredBy) &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 300));
+    }
+
+    function isValidStockAdjustment(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'productId', 'productName', 'previousStock', 'newStock', 'delta', 'reason', 'adjustedBy', 'adjustedByName', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'productId', 'productName', 'previousStock', 'newStock', 'delta', 'reason', 'notes', 'adjustedBy', 'adjustedByName', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        isValidId(data.productId) &&
+        data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 150 &&
+        data.previousStock is number && data.previousStock >= 0 &&
+        data.newStock is number && data.newStock >= 0 &&
+        data.delta is number &&
+        data.reason in ['Stock-Take', 'Damaged', 'Expired', 'Theft/Loss', 'Return', 'Correction'] &&
+        isValidId(data.adjustedBy) &&
+        data.adjustedByName is string && data.adjustedByName.size() <= 120 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 300));
+    }
+
+    function isValidPayrollRun(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'periodLabel', 'paymentMethod', 'entries', 'totalGrossUgx', 'totalPayeUgx', 'totalNssfEmployeeUgx', 'totalNssfEmployerUgx', 'totalNetPayUgx', 'processedBy', 'processedByName', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'periodLabel', 'paymentMethod', 'entries', 'totalGrossUgx', 'totalPayeUgx', 'totalNssfEmployeeUgx', 'totalNssfEmployerUgx', 'totalNetPayUgx', 'processedBy', 'processedByName', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        data.periodLabel is string && data.periodLabel.size() >= 1 && data.periodLabel.size() <= 64 &&
+        data.paymentMethod is string && data.paymentMethod.size() >= 1 && data.paymentMethod.size() <= 64 &&
+        data.entries is list && data.entries.size() > 0 && data.entries.size() <= 200 &&
+        data.totalGrossUgx is number && data.totalGrossUgx >= 0 &&
+        data.totalPayeUgx is number && data.totalPayeUgx >= 0 &&
+        data.totalNssfEmployeeUgx is number && data.totalNssfEmployeeUgx >= 0 &&
+        data.totalNssfEmployerUgx is number && data.totalNssfEmployerUgx >= 0 &&
+        data.totalNetPayUgx is number && data.totalNetPayUgx >= 0 &&
+        isValidId(data.processedBy) &&
+        data.processedByName is string && data.processedByName.size() <= 120 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128));
+    }
+
+    function isValidAuditLog(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'actorId', 'actorName', 'actorRole', 'action', 'entityType', 'summary', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'actorId', 'actorName', 'actorRole', 'action', 'entityType', 'entityId', 'summary', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        isValidId(data.actorId) &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+        data.actorRole is string && data.actorRole.size() <= 32 &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 80 &&
+        data.entityType is string && data.entityType.size() >= 1 && data.entityType.size() <= 64 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
+        (!('entityId' in data) || (data.entityId is string && data.entityId.size() <= 128));
+    }
+
+    function isValidAIChatMessage(data, tenantId) {
+      return data.keys().hasAll(['id', 'tenantId', 'userId', 'role', 'text', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'userId', 'role', 'text', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.tenantId == tenantId &&
+        isValidId(data.userId) &&
+        data.role in ['user', 'assistant'] &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 8000 &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /masterAdmins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isMasterAdmin());
+      allow list: if isMasterAdmin();
+    }
+
+    match /emailRegistry/{emailHash} {
+      allow get: if isAuthenticated() && isValidEmailHash(emailHash);
+      allow create: if isAuthenticated() &&
+        isValidEmailHash(emailHash) &&
+        !exists(/databases/$(database)/documents/emailRegistry/$(emailHash)) &&
+        isValidEmailRegistry(incoming(), emailHash);
+      allow update: if isAuthenticated() &&
+        isValidEmailHash(emailHash) &&
+        isValidEmailRegistry(incoming(), emailHash) &&
+        incoming().hash == existing().hash &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isMasterAdmin() ||
+          (existing().type == 'invite' &&
+           incoming().type == 'account' &&
+           incoming().tenantId == existing().tenantId)
+        );
+      allow delete: if isAuthenticated() &&
+        isValidEmailHash(emailHash) &&
+        (isMasterAdmin() || isTenantAdmin(existing().tenantId));
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isMasterAdmin());
+      allow list: if isMasterAdmin();
+      allow delete: if isValidId(userId) &&
+        (
+          isMasterAdmin() ||
+          isOwner(userId) ||
+          (userExists() && userData().role == 'admin' && existing().tenantId == userData().tenantId)
+        );
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUser(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().status == 'active' &&
+        (
+          (incoming().role == 'admin' &&
+           !('allowedSections' in incoming()) &&
+           existsAfter(/databases/$(database)/documents/tenants/$(incoming().tenantId))) ||
+          ('inviteId' in incoming() &&
+           exists(/databases/$(database)/documents/staffInvites/$(incoming().inviteId)) &&
+           get(/databases/$(database)/documents/staffInvites/$(incoming().inviteId)).data.tenantId == incoming().tenantId &&
+           get(/databases/$(database)/documents/staffInvites/$(incoming().inviteId)).data.role == incoming().role &&
+           get(/databases/$(database)/documents/staffInvites/$(incoming().inviteId)).data.email.lower() == authEmailLower() &&
+           get(/databases/$(database)/documents/staffInvites/$(incoming().inviteId)).data.status == 'pending' &&
+           (!('allowedSections' in incoming()) ||
+            ('allowedSections' in get(/databases/$(database)/documents/staffInvites/$(incoming().inviteId)).data &&
+             incoming().allowedSections == get(/databases/$(database)/documents/staffInvites/$(incoming().inviteId)).data.allowedSections)))
+        );
+      allow update: if isValidId(userId) &&
+        isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().tenantId == existing().tenantId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          (isOwner(userId) &&
+           incoming().role == existing().role &&
+           incoming().status == existing().status &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'branchId'])) ||
+          (isTenantAdmin(existing().tenantId) &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['role', 'allowedSections', 'branchId', 'status']))
+        );
+    }
+
+    match /staffInvites/{inviteId} {
+      allow get: if isValidId(inviteId) &&
+        isAuthenticated() &&
+        (existing().email.lower() == authEmailLower() || existing().invitedBy == request.auth.uid || isTenantAdmin(existing().tenantId));
+      allow list: if isAuthenticated() &&
+        (resource.data.email.lower() == authEmailLower() ||
+         resource.data.invitedBy == request.auth.uid ||
+         isTenantAdmin(resource.data.tenantId));
+      allow create: if isValidId(inviteId) &&
+        isValidStaffInvite(incoming()) &&
+        incoming().id == inviteId &&
+        incoming().status == 'pending' &&
+        incoming().invitedBy == request.auth.uid &&
+        isTenantAdmin(incoming().tenantId);
+      allow update: if isValidId(inviteId) &&
+        isValidStaffInvite(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().tenantId == existing().tenantId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isTenantAdmin(existing().tenantId) ||
+          (isAuthenticated() &&
+           existing().email.lower() == authEmailLower() &&
+           existing().status == 'pending' &&
+           incoming().status == 'accepted' &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['status']))
+        );
+      allow delete: if isValidId(inviteId) && isTenantAdmin(existing().tenantId);
+    }
+
+    match /tenants/{tenantId} {
+      allow get: if isValidId(tenantId) && (belongsToTenant(tenantId) || isMasterAdmin());
+      allow list: if isMasterAdmin();
+      allow create: if isAuthenticated() &&
+        isValidId(tenantId) &&
+        isValidTenant(incoming()) &&
+        incoming().id == tenantId &&
+        incoming().plan == 'micro' &&
+        incoming().status == 'trial' &&
+        !('isComplimentary' in incoming()) &&
+        !userExists() &&
+        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == tenantId &&
+        getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow update: if isValidId(tenantId) &&
+        isValidTenant(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isMasterAdmin() ||
+          (isTenantAdmin(tenantId) &&
+           incoming().diff(existing()).affectedKeys().hasOnly([
+             'name', 'logo', 'tin', 'ownerEmail', 'ownerName', 'ownerPhone',
+             'branding', 'preferences', 'billingPaymentMethods',
+             'status', 'pendingPlan', 'pendingAmountUgx', 'pendingPaymentMethod',
+             'pendingPaymentRef', 'pendingTransactionId', 'pendingPayerPhone',
+             'pendingInvoiceId', 'pendingSubmittedAt',
+             'lastReminderAt', 'lastReminderMessage', 'lastReminderChannel', 'lastAutoReminderAt'
+           ]) &&
+           (!incoming().diff(existing()).affectedKeys().hasAny(['status']) || incoming().status == 'pending_approval'))
+        );
+      allow delete: if isValidId(tenantId) && (isMasterAdmin() || isTenantAdmin(tenantId));
+
+      match /members/{memberId} {
+        allow get: if isValidId(memberId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
+        allow create: if isValidId(memberId) &&
+          isValidTenantMember(incoming(), tenantId) &&
+          incoming().uid == memberId &&
+          (
+            isTenantAdmin(tenantId) ||
+            (isOwner(memberId) &&
+             getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == tenantId &&
+             incoming().role == getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role)
+          );
+        allow update: if isValidId(memberId) &&
+          isValidTenantMember(incoming(), tenantId) &&
+          incoming().uid == existing().uid &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isTenantAdmin(tenantId) ||
+            (isOwner(memberId) &&
+             incoming().role == existing().role &&
+             incoming().status == existing().status &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'branchId']))
+          );
+        allow delete: if isValidId(memberId) && (isMasterAdmin() || isTenantAdmin(tenantId));
+      }
+
+      match /branches/{branchId} {
+        allow get: if isValidId(branchId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
+        allow create: if isValidId(branchId) &&
+          isValidBranch(incoming(), tenantId) &&
+          incoming().id == branchId &&
+          (
+            (isTenantManagerOrAdmin(tenantId) && tenantNotSuspended(tenantId)) ||
+            (isAuthenticated() &&
+             !userExists() &&
+             getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == tenantId &&
+             getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
+             getAfter(/databases/$(database)/documents/tenants/$(tenantId)).data.status == 'trial')
+          );
+        allow update: if isValidId(branchId) &&
+          isTenantManagerOrAdmin(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidBranch(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isValidId(branchId) && isTenantAdmin(tenantId);
+      }
+
+      match /products/{productId} {
+        allow get: if isValidId(productId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(productId) &&
+          canManageInventory(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidProduct(incoming(), tenantId) &&
+          incoming().id == productId;
+        allow update: if isValidId(productId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidProduct(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            canManageInventory(tenantId) ||
+            (belongsToTenant(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['currentStock', 'branchStock']))
+          );
+        allow delete: if isValidId(productId) && isTenantAdmin(tenantId);
+      }
+
+      match /sales/{saleId} {
+        allow get: if isValidId(saleId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(saleId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidSale(incoming(), tenantId) &&
+          incoming().id == saleId &&
+          (!('userId' in incoming()) || incoming().userId == request.auth.uid);
+        allow update: if isValidId(saleId) &&
+          isTenantManagerOrAdmin(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidSale(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isValidId(saleId) && isTenantAdmin(tenantId);
+      }
+
+      match /shifts/{shiftId} {
+        allow get: if isValidId(shiftId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(shiftId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidShift(incoming(), tenantId) &&
+          incoming().id == shiftId &&
+          incoming().userId == request.auth.uid;
+        allow update: if isValidId(shiftId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidShift(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().openedAt == existing().openedAt &&
+          (isTenantManagerOrAdmin(tenantId) || existing().userId == request.auth.uid);
+        allow delete: if isValidId(shiftId) && isTenantAdmin(tenantId);
+      }
+
+      match /purchaseOrders/{poId} {
+        allow get: if isValidId(poId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(poId) &&
+          canManageInventory(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidPurchaseOrder(incoming(), tenantId) &&
+          incoming().id == poId;
+        allow update: if isValidId(poId) &&
+          canManageInventory(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidPurchaseOrder(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isValidId(poId) && isTenantAdmin(tenantId);
+      }
+
+      match /creditPayments/{paymentId} {
+        allow get: if isValidId(paymentId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(paymentId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidCreditPayment(incoming(), tenantId) &&
+          incoming().id == paymentId;
+        allow delete: if isValidId(paymentId) && isTenantAdmin(tenantId);
+      }
+
+      match /suppliers/{supplierId} {
+        allow get: if isValidId(supplierId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(supplierId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidSupplier(incoming(), tenantId) &&
+          incoming().id == supplierId;
+        allow update: if isValidId(supplierId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidSupplier(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isValidId(supplierId) && isTenantAdmin(tenantId);
+      }
+
+      match /customers/{customerId} {
+        allow get: if isValidId(customerId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(customerId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidCustomer(incoming(), tenantId) &&
+          incoming().id == customerId;
+        allow update: if isValidId(customerId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidCustomer(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isValidId(customerId) && isTenantAdmin(tenantId);
+      }
+
+      match /expenses/{expenseId} {
+        allow get: if isValidId(expenseId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(expenseId) &&
+          belongsToTenant(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidExpense(incoming(), tenantId) &&
+          incoming().id == expenseId &&
+          (!('recordedBy' in incoming()) || incoming().recordedBy == request.auth.uid);
+        allow update: if isValidId(expenseId) &&
+          canAccessFinance(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidExpense(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isValidId(expenseId) && isTenantAdmin(tenantId);
+      }
+
+      match /billingHistory/{historyId} {
+        allow get: if isValidId(historyId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
+        allow create: if isValidId(historyId) &&
+          isValidBillingHistory(incoming(), tenantId) &&
+          incoming().id == historyId &&
+          (
+            isMasterAdmin() ||
+            (isTenantAdmin(tenantId) && incoming().status == 'Pending Approval')
+          );
+        allow update: if isValidId(historyId) &&
+          isMasterAdmin() &&
+          isValidBillingHistory(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isValidId(historyId) && (isMasterAdmin() || isTenantAdmin(tenantId));
+      }
+
+      match /reminders/{reminderId} {
+        allow get: if isValidId(reminderId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
+        allow create: if isValidId(reminderId) &&
+          isMasterAdmin() &&
+          isValidReminder(incoming(), tenantId) &&
+          incoming().id == reminderId;
+        allow update: if isValidId(reminderId) &&
+          isValidReminder(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isMasterAdmin() ||
+            (belongsToTenant(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['acknowledged']))
+          );
+        allow delete: if isValidId(reminderId) && (isMasterAdmin() || isTenantAdmin(tenantId));
+      }
+
+      match /notifications/{notificationId} {
+        allow get: if isValidId(notificationId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
+        allow create: if isValidId(notificationId) &&
+          isValidAppNotification(incoming(), tenantId) &&
+          incoming().id == notificationId &&
+          (isMasterAdmin() || isTenantAdmin(tenantId));
+        allow update: if isValidId(notificationId) &&
+          isValidAppNotification(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isMasterAdmin() ||
+            (belongsToTenant(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'readAt']))
+          );
+        allow delete: if isValidId(notificationId) && (isMasterAdmin() || belongsToTenant(tenantId));
+      }
+
+      match /stockTransfers/{transferId} {
+        allow get: if isValidId(transferId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(transferId) &&
+          canManageInventory(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidStockTransfer(incoming(), tenantId) &&
+          incoming().id == transferId &&
+          incoming().transferredBy == request.auth.uid;
+        allow delete: if isValidId(transferId) && isTenantAdmin(tenantId);
+      }
+
+      match /stockAdjustments/{adjustmentId} {
+        allow get: if isValidId(adjustmentId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(adjustmentId) &&
+          canManageInventory(tenantId) &&
+          tenantNotSuspended(tenantId) &&
+          isValidStockAdjustment(incoming(), tenantId) &&
+          incoming().id == adjustmentId &&
+          incoming().adjustedBy == request.auth.uid;
+        allow delete: if isValidId(adjustmentId) && isTenantAdmin(tenantId);
+      }
+
+      match /payrollRuns/{payrollId} {
+        allow get: if isValidId(payrollId) && canAccessFinance(tenantId);
+        allow list: if canAccessFinance(tenantId);
+        allow create: if isValidId(payrollId) &&
+          (isTenantAdmin(tenantId) || (canAccessFinance(tenantId) && userData().role == 'accountant')) &&
+          tenantNotSuspended(tenantId) &&
+          isValidPayrollRun(incoming(), tenantId) &&
+          incoming().id == payrollId &&
+          incoming().processedBy == request.auth.uid;
+        allow delete: if isValidId(payrollId) && isTenantAdmin(tenantId);
+      }
+
+      match /auditLogs/{logId} {
+        allow get: if isValidId(logId) && (isTenantManagerOrAdmin(tenantId) || canAccessFinance(tenantId));
+        allow list: if isTenantManagerOrAdmin(tenantId) || canAccessFinance(tenantId);
+        allow create: if isValidId(logId) &&
+          belongsToTenant(tenantId) &&
+          isValidAuditLog(incoming(), tenantId) &&
+          incoming().id == logId &&
+          incoming().actorId == request.auth.uid;
+        allow delete: if isValidId(logId) && (isMasterAdmin() || isTenantAdmin(tenantId));
+      }
+
+      match /aiChats/{chatId} {
+        allow get: if isValidId(chatId) && belongsToTenant(tenantId);
+        allow list: if belongsToTenant(tenantId);
+        allow create: if isValidId(chatId) &&
+          belongsToTenant(tenantId) &&
+          isValidAIChatMessage(incoming(), tenantId) &&
+          incoming().id == chatId &&
+          incoming().userId == request.auth.uid;
+        allow delete: if isValidId(chatId) && belongsToTenant(tenantId) &&
+          (existing().userId == request.auth.uid || isTenantAdmin(tenantId));
+      }
+    }
+
+    match /test/connection {
+      allow get: if true;
+    }
+  }
+}
