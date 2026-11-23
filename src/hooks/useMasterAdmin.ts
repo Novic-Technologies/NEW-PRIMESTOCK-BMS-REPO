@@ -1,21 +1,32 @@
 import { useEffect, useState } from 'react';
 import {
   collection,
+  deleteDoc,
   deleteField,
   doc,
+  getCountFromServer,
+  getDoc,
   getDocs,
   onSnapshot,
   orderBy,
   query,
   setDoc,
   updateDoc,
+  where,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { localDb } from '../services/db';
 import { useAuthStore } from '../store/authStore';
 import {
   AppNotification,
+  AppSection,
   BillingHistory,
   Branch,
+  BusinessRole,
+  PlatformBillingConfig,
+  PlatformPlansConfig,
+  StaffInvite,
   SubscriptionReminder,
   Tenant,
   TenantMember,
@@ -25,6 +36,13 @@ import { stripUndefined } from '../utils/firestoreUtils';
 import { addCalendarMonths, computeTrialState } from '../utils/trialUtils';
 import { getPlanQuota } from '../utils/planLimits';
 import { formatDate, formatUGX } from '../utils/format';
+import { getDefaultSectionsForRole, hashEmailForRegistry } from '../utils/rbac';
+import { normalizePlatformBillingConfig } from '../utils/platformBilling';
+import {
+  getPlatformPlansConfig,
+  normalizePlatformPlansConfig,
+  setSyncedPlatformPlansConfig,
+} from '../utils/platformPlans';
 import {
   buildSubscriptionEmailHtml,
   sendTransactionalEmail,
@@ -32,11 +50,23 @@ import {
 } from '../services/notificationService';
 import toast from 'react-hot-toast';
 
+export interface OrgUsageMetric {
+  tenantId: string;
+  productsCount: number;
+  activeUsersCount: number;
+  pendingInvitesCount: number;
+  branchesCount: number;
+  salesCount: number;
+}
+
 export interface OrgDetailsSnapshot {
   branches: Branch[];
   members: TenantMember[];
+  invites: StaffInvite[];
   billingHistory: BillingHistory[];
   reminders: SubscriptionReminder[];
+  productsCount: number;
+  salesCount: number;
 }
 
 export interface SweepReport {
@@ -47,8 +77,41 @@ export interface SweepReport {
   whatsappLinks: Array<{ tenantName: string; url: string }>;
 }
 
+const TENANT_PURGE_SUBCOLLECTIONS = [
+  'products',
+  'sales',
+  'customers',
+  'expenses',
+  'suppliers',
+  'branches',
+  'shifts',
+  'purchaseOrders',
+  'creditPayments',
+  'billingHistory',
+  'reminders',
+  'notifications',
+  'stockTransfers',
+  'stockAdjustments',
+  'payrollRuns',
+  'auditLogs',
+  'aiChats',
+] as const;
+
+async function deleteCollectionInBatches(colPath: string): Promise<void> {
+  const snap = await getDocs(collection(db, colPath));
+  if (snap.empty) return;
+  const CHUNK_SIZE = 400;
+  for (let i = 0; i < snap.docs.length; i += CHUNK_SIZE) {
+    const batch = writeBatch(db);
+    for (const d of snap.docs.slice(i, i + CHUNK_SIZE)) {
+      batch.delete(d.ref);
+    }
+    await batch.commit();
+  }
+}
+
 export function useMasterAdmin() {
-  const { user, isMasterAdmin } = useAuthStore();
+  const { user, tenant, isMasterAdmin } = useAuthStore();
   const [organizations, setOrganizations] = useState<Tenant[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isActing, setIsActing] = useState(false);
@@ -651,6 +714,10 @@ export function useMasterAdmin() {
     let emailedCount = 0;
     const whatsappLinks: Array<{ tenantName: string; url: string }> = [];
 
+    const plansCfg = getPlatformPlansConfig();
+    const leadDays = plansCfg.reminderLeadDays || 3;
+    const autoLock = plansCfg.autoLockExpired !== false;
+
     try {
       for (const org of organizations) {
         if (org.isComplimentary || org.autoRemindersEnabled === false) continue;
@@ -667,8 +734,8 @@ export function useMasterAdmin() {
           org.lastAutoReminderAt &&
           nowMs - new Date(org.lastAutoReminderAt).getTime() < 24 * 60 * 60 * 1000;
 
-        // 1. Expired unpaid workspace -> auto lock & send expired notice
-        if (state.isExpired && !state.isPendingApproval && (!org.locked || org.status !== 'suspended')) {
+        // 1. Expired unpaid workspace -> auto lock (if enabled) & send expired notice
+        if (autoLock && state.isExpired && !state.isPendingApproval && (!org.locked || org.status !== 'suspended')) {
           const msg = `Your ${quota.name} subscription (${formatUGX(
             fee
           )}/month) expired on ${expiryStr} and has been locked. Renew via MTN MoMo or Airtel Money in Billing to unlock your workspace.`;
@@ -720,11 +787,11 @@ export function useMasterAdmin() {
           continue;
         }
 
-        // 2. Expiring within 3 days -> send automated pre-expiry reminder
+        // 2. Expiring within configured lead days -> send automated pre-expiry reminder
         if (
           !state.isExpired &&
           state.effectiveEndsAt &&
-          state.daysRemaining <= 3 &&
+          state.daysRemaining <= leadDays &&
           !recentlyAutoReminded
         ) {
           const msg = `Reminder: ${org.name}'s ${quota.name} plan (${formatUGX(
@@ -797,19 +864,348 @@ export function useMasterAdmin() {
   };
 
   const inspectOrganizationDetails = async (tenantId: string): Promise<OrgDetailsSnapshot> => {
-    const [branchesSnap, membersSnap, billingSnap, remindersSnap] = await Promise.all([
+    const [
+      branchesSnap,
+      membersSnap,
+      invitesSnap,
+      billingSnap,
+      remindersSnap,
+      productsCountSnap,
+      salesCountSnap,
+    ] = await Promise.all([
       getDocs(collection(db, `tenants/${tenantId}/branches`)),
       getDocs(collection(db, `tenants/${tenantId}/members`)),
+      getDocs(query(collection(db, 'staffInvites'), where('tenantId', '==', tenantId))),
       getDocs(query(collection(db, `tenants/${tenantId}/billingHistory`), orderBy('createdAt', 'desc'))),
       getDocs(query(collection(db, `tenants/${tenantId}/reminders`), orderBy('createdAt', 'desc'))),
+      getCountFromServer(collection(db, `tenants/${tenantId}/products`)).catch(() => null),
+      getCountFromServer(collection(db, `tenants/${tenantId}/sales`)).catch(() => null),
     ]);
+
+    const members = membersSnap.docs
+      .map((d) => ({ uid: d.id, ...d.data() } as TenantMember))
+      .sort((a, b) => {
+        if (a.role === 'admin' && b.role !== 'admin') return -1;
+        if (b.role === 'admin' && a.role !== 'admin') return 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+
+    const invites = invitesSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as StaffInvite))
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     return {
       branches: branchesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Branch)),
-      members: membersSnap.docs.map((d) => ({ uid: d.id, ...d.data() } as TenantMember)),
+      members,
+      invites,
       billingHistory: billingSnap.docs.map((d) => ({ id: d.id, ...d.data() } as BillingHistory)),
       reminders: remindersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as SubscriptionReminder)),
+      productsCount: productsCountSnap?.data().count ?? 0,
+      salesCount: salesCountSnap?.data().count ?? 0,
     };
+  };
+
+  const updateOrgMember = async (
+    tenantId: string,
+    memberUid: string,
+    updates: {
+      role?: BusinessRole;
+      status?: 'active' | 'inactive';
+      branchId?: string | null;
+      allowedSections?: AppSection[];
+    }
+  ): Promise<boolean> => {
+    if (!user || !isMasterAdmin || isActing) return false;
+    setIsActing(true);
+    try {
+      const payload: Record<string, unknown> = {};
+      if (updates.role !== undefined) {
+        payload.role = updates.role;
+        if (updates.role === 'admin') {
+          payload.allowedSections = deleteField();
+        } else {
+          payload.allowedSections =
+            updates.allowedSections && updates.allowedSections.length > 0
+              ? updates.allowedSections
+              : getDefaultSectionsForRole(updates.role);
+        }
+      } else if (updates.allowedSections !== undefined && updates.allowedSections.length > 0) {
+        payload.allowedSections = updates.allowedSections;
+      }
+
+      if (updates.status !== undefined) {
+        payload.status = updates.status;
+      }
+
+      if (updates.branchId === null || updates.branchId === '') {
+        payload.branchId = deleteField();
+      } else if (updates.branchId !== undefined) {
+        payload.branchId = updates.branchId;
+      }
+
+      await updateDoc(doc(db, `tenants/${tenantId}/members`, memberUid), payload);
+
+      try {
+        const userRef = doc(db, 'users', memberUid);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          await updateDoc(userRef, payload);
+        }
+      } catch {
+        // Member record updated even if user mirror profile hasn't been synced yet
+      }
+
+      toast.success('Sub-account updated');
+      return true;
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.UPDATE, `tenants/${tenantId}/members/${memberUid}`);
+      } catch (structuredErr) {
+        console.error(structuredErr);
+      }
+      toast.error('Failed to update staff sub-account');
+      return false;
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  const revokeOrgInvite = async (invite: StaffInvite): Promise<boolean> => {
+    if (!user || !isMasterAdmin || isActing) return false;
+    setIsActing(true);
+    try {
+      await deleteDoc(doc(db, 'staffInvites', invite.id));
+      if (invite.email) {
+        try {
+          const emailHash = await hashEmailForRegistry(invite.email);
+          const regRef = doc(db, 'emailRegistry', emailHash);
+          const regSnap = await getDoc(regRef);
+          if (
+            regSnap.exists() &&
+            regSnap.data()?.type === 'invite' &&
+            regSnap.data()?.tenantId === invite.tenantId
+          ) {
+            await deleteDoc(regRef);
+          }
+        } catch {
+          // Ignore registry cleanup failure
+        }
+      }
+      toast.success(`Revoked invite for ${invite.email}`);
+      return true;
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.DELETE, `staffInvites/${invite.id}`);
+      } catch (structuredErr) {
+        console.error(structuredErr);
+      }
+      toast.error('Failed to revoke staff invite');
+      return false;
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  const savePlatformBillingConfig = async (
+    nextConfig: PlatformBillingConfig
+  ): Promise<boolean> => {
+    if (!user || !isMasterAdmin || isActing) return false;
+    setIsActing(true);
+    try {
+      const normalized = normalizePlatformBillingConfig({
+        ...nextConfig,
+        id: 'billing',
+        updatedAt: new Date().toISOString(),
+        updatedBy: (user.email || user.uid).slice(0, 128),
+      });
+      if (!normalized.channels.some((ch) => ch.enabled)) {
+        toast.error('Enable at least one subscription payment method for businesses.');
+        return false;
+      }
+      const cleanPayload = stripUndefined(normalized);
+      await setDoc(doc(db, 'platformConfig', 'billing'), cleanPayload);
+      toast.success('Platform subscription payment methods saved & synced live');
+      return true;
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.WRITE, 'platformConfig/billing');
+      } catch (structuredErr) {
+        console.error(structuredErr);
+      }
+      toast.error('Failed to save platform payment methods');
+      return false;
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  const savePlatformPlansConfig = async (
+    nextConfig: PlatformPlansConfig
+  ): Promise<boolean> => {
+    if (!user || !isMasterAdmin || isActing) return false;
+    setIsActing(true);
+    try {
+      const normalized = normalizePlatformPlansConfig({
+        ...nextConfig,
+        id: 'plans',
+        updatedAt: new Date().toISOString(),
+        updatedBy: (user.email || user.uid).slice(0, 128),
+      });
+      const cleanPayload = stripUndefined(normalized);
+      await setDoc(doc(db, 'platformConfig', 'plans'), cleanPayload);
+      setSyncedPlatformPlansConfig(normalized);
+      toast.success('Tier limits & upgrade paths saved and enforced system-wide');
+      return true;
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.WRITE, 'platformConfig/plans');
+      } catch (structuredErr) {
+        console.error(structuredErr);
+      }
+      toast.error('Failed to save tier & upgrade path rules');
+      return false;
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  const fetchAllOrgUsageMetrics = async (
+    orgList: Tenant[] = organizations
+  ): Promise<Record<string, OrgUsageMetric>> => {
+    if (!user || !isMasterAdmin || orgList.length === 0) return {};
+    const result: Record<string, OrgUsageMetric> = {};
+    const BATCH = 6;
+
+    for (let i = 0; i < orgList.length; i += BATCH) {
+      const slice = orgList.slice(i, i + BATCH);
+      await Promise.all(
+        slice.map(async (org) => {
+          const [prodSnap, memSnap, invSnap, branchSnap, saleSnap] = await Promise.all([
+            getCountFromServer(collection(db, `tenants/${org.id}/products`)).catch(() => null),
+            getCountFromServer(
+              query(collection(db, `tenants/${org.id}/members`), where('status', '==', 'active'))
+            ).catch(() => null),
+            getCountFromServer(
+              query(
+                collection(db, 'staffInvites'),
+                where('tenantId', '==', org.id),
+                where('status', '==', 'pending')
+              )
+            ).catch(() => null),
+            getCountFromServer(collection(db, `tenants/${org.id}/branches`)).catch(() => null),
+            getCountFromServer(collection(db, `tenants/${org.id}/sales`)).catch(() => null),
+          ]);
+
+          result[org.id] = {
+            tenantId: org.id,
+            productsCount: prodSnap?.data().count ?? 0,
+            activeUsersCount: memSnap?.data().count ?? 1,
+            pendingInvitesCount: invSnap?.data().count ?? 0,
+            branchesCount: branchSnap?.data().count ?? 1,
+            salesCount: saleSnap?.data().count ?? 0,
+          };
+        })
+      );
+    }
+
+    return result;
+  };
+
+  const deleteOrganizationWorkspace = async (target: Tenant): Promise<boolean> => {
+    if (!user || !isMasterAdmin || isActing) return false;
+
+    if (tenant?.id && target.id === tenant.id) {
+      toast.error('You cannot purge your active workspace from Master Console; use Settings > Delete Account instead.');
+      return false;
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      toast.error('Connect to the internet to permanently purge a workspace.');
+      return false;
+    }
+
+    setIsActing(true);
+    try {
+      const [membersSnap, invitesSnap] = await Promise.all([
+        getDocs(collection(db, `tenants/${target.id}/members`)),
+        getDocs(query(collection(db, 'staffInvites'), where('tenantId', '==', target.id))),
+      ]);
+
+      const emailSet = new Set<string>();
+      if (target.ownerEmail) emailSet.add(target.ownerEmail.trim().toLowerCase());
+
+      const memberUids: string[] = [];
+      for (const mDoc of membersSnap.docs) {
+        const m = mDoc.data() as TenantMember;
+        if (m.email) emailSet.add(m.email.trim().toLowerCase());
+        if (mDoc.id) memberUids.push(mDoc.id);
+      }
+
+      for (const invDoc of invitesSnap.docs) {
+        const inv = invDoc.data() as StaffInvite;
+        if (inv.email) emailSet.add(inv.email.trim().toLowerCase());
+      }
+
+      const emailHashes = await Promise.all(
+        Array.from(emailSet)
+          .filter(Boolean)
+          .map((em) => hashEmailForRegistry(em))
+      );
+
+      // Delete operational subcollections in parallel
+      await Promise.all(
+        TENANT_PURGE_SUBCOLLECTIONS.map((sub) =>
+          deleteCollectionInBatches(`tenants/${target.id}/${sub}`)
+        )
+      );
+
+      // Delete staff invites, verified emailRegistry locks belonging to this tenant, and member/user records
+      await Promise.all([
+        ...invitesSnap.docs.map((d) => deleteDoc(d.ref).catch(() => {})),
+        ...emailHashes.map(async (h) => {
+          try {
+            const regRef = doc(db, 'emailRegistry', h);
+            const regSnap = await getDoc(regRef);
+            if (regSnap.exists() && regSnap.data()?.tenantId === target.id) {
+              await deleteDoc(regRef);
+            }
+          } catch {
+            // Ignore registry cleanup errors
+          }
+        }),
+        ...memberUids.map((uid) =>
+          Promise.allSettled([
+            deleteDoc(doc(db, `tenants/${target.id}/members`, uid)),
+            ...(uid !== user.uid ? [deleteDoc(doc(db, 'users', uid))] : []),
+          ])
+        ),
+      ]);
+
+      await deleteDoc(doc(db, 'tenants', target.id));
+
+      // Clear any cached Dexie/localStorage entries for the purged tenant
+      await Promise.all(
+        localDb.tables.map((t) => t.where('tenantId').equals(target.id).delete().catch(() => {}))
+      );
+      try {
+        localStorage.removeItem(`primestock_pos_held_carts_${target.id}`);
+      } catch {
+        // Ignore storage errors
+      }
+
+      toast.success(`Permanently purged workspace "${target.name}" and its Firestore records.`);
+      return true;
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.DELETE, `tenants/${target.id}`);
+      } catch (structuredErr) {
+        console.error(structuredErr);
+      }
+      toast.error('Failed to purge organization workspace.');
+      return false;
+    } finally {
+      setIsActing(false);
+    }
   };
 
   return {
@@ -824,5 +1220,11 @@ export function useMasterAdmin() {
     sendSubscriptionReminder,
     runSubscriptionSweep,
     inspectOrganizationDetails,
+    updateOrgMember,
+    revokeOrgInvite,
+    savePlatformBillingConfig,
+    savePlatformPlansConfig,
+    fetchAllOrgUsageMetrics,
+    deleteOrganizationWorkspace,
   };
 }

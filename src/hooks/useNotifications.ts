@@ -14,7 +14,7 @@ import { db } from '../firebase';
 import { useAuthStore } from '../store/authStore';
 import { useTrialGuard } from './useTrialGuard';
 import { AppNotification, Product } from '../types';
-import { getPlanQuota } from '../utils/planLimits';
+import { getPlanQuota, getTrialDaysCount } from '../utils/planLimits';
 import { formatDate, formatUGX } from '../utils/format';
 import { stripUndefined } from '../utils/firestoreUtils';
 import {
@@ -156,7 +156,7 @@ export function useNotifications({
 
     const title = trialState.isExpired
       ? trialState.isTrial
-        ? '14-Day Free Trial Ended — Upgrade Required'
+        ? `${getTrialDaysCount()}-Day Free Trial Ended — Upgrade Required`
         : 'Monthly Subscription Expired — Renewal Required'
       : `Subscription Renewal Due in ${trialState.daysRemaining} Day${
           trialState.daysRemaining === 1 ? '' : 's'

@@ -134,6 +134,7 @@ export function useBilling() {
       });
 
       const finalRef = verification.reference || paymentRef;
+      const resolvedTxId = verification.transactionId || paymentDetails?.transactionId?.trim();
       const invoice: BillingHistory = stripUndefined({
         id: invoiceId,
         tenantId: tenant.id,
@@ -144,6 +145,8 @@ export function useBilling() {
         ...(paymentDetails?.payerPhone ? { payerPhone: paymentDetails.payerPhone } : {}),
         status: 'Pending Approval',
         reference: finalRef,
+        ...(verification.gatewayVerified ? { gatewayVerified: true } : {}),
+        ...(resolvedTxId ? { gatewayTxId: resolvedTxId } : {}),
         createdAt: nowIso,
       });
 

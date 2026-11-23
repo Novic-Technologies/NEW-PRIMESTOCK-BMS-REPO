@@ -19,6 +19,7 @@ export const ALL_SECTIONS: SectionDefinition[] = [
   { id: 'payroll', label: 'Payroll', path: '/payroll', description: 'Staff salaries, PAYE & NSSF' },
   { id: 'reports', label: 'Reports', path: '/reports', description: 'Profit, tax & analytics' },
   { id: 'shifts', label: 'Shifts & Audit', path: '/shifts', description: 'Cash register shifts & audit trail' },
+  { id: 'bulk_import', label: 'Bulk Import', path: '/bulk-import', description: 'AI document & spreadsheet bulk import studio' },
   { id: 'ai', label: 'AI Copilot', path: '/ai', description: 'Smart inventory & restock insights' },
   { id: 'team', label: 'Team & Branches', path: '/team', description: 'Staff accounts, roles & branches' },
   { id: 'billing', label: 'Billing', path: '/billing', description: 'Subscription & plan payments' },
@@ -53,6 +54,7 @@ export const ROLE_META: Record<
       'suppliers',
       'reports',
       'shifts',
+      'bulk_import',
     ],
   },
   cashier: {
@@ -63,12 +65,12 @@ export const ROLE_META: Record<
   accountant: {
     label: 'Finance / Accountant',
     summary: 'Finance ledger, payroll & financial reports only.',
-    defaultSections: ['finance', 'payroll', 'reports'],
+    defaultSections: ['finance', 'payroll', 'reports', 'bulk_import'],
   },
   inventory: {
     label: 'Inventory / Storekeeper',
     summary: 'Stock control, purchase orders & suppliers only.',
-    defaultSections: ['inventory', 'purchases', 'suppliers'],
+    defaultSections: ['inventory', 'purchases', 'suppliers', 'bulk_import'],
   },
 };
 
@@ -91,8 +93,12 @@ export function hasSectionAccess(user: User | null | undefined, section: AppSect
   return getUserAllowedSections(user).includes(section);
 }
 
-export function getDefaultRouteForUser(user: User | null | undefined): string {
+export function getDefaultRouteForUser(
+  user: User | null | undefined,
+  isMasterAdmin = false
+): string {
   if (!user) return '/login';
+  if (isMasterAdmin) return '/master';
   if (user.role === 'admin') return '/';
   const allowed = getUserAllowedSections(user);
   for (const def of ALL_SECTIONS) {
@@ -128,6 +134,32 @@ export function canManageFinanceData(user: User | null | undefined): boolean {
     hasSectionAccess(user, 'finance') ||
     hasSectionAccess(user, 'payroll')
   );
+}
+
+export function isValidPinFormat(pin: string): boolean {
+  return /^\d{4}$/.test(pin.trim());
+}
+
+export async function hashStaffPin(tenantId: string, uid: string, pin: string): Promise<string> {
+  const input = `primestock-pin:${tenantId}:${uid}:${pin.trim()}`;
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const data = new TextEncoder().encode(input);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  return (
+    (h1 >>> 0).toString(16).padStart(8, '0') +
+    (h2 >>> 0).toString(16).padStart(8, '0')
+  ).padEnd(64, '0');
 }
 
 export async function hashEmailForRegistry(email: string): Promise<string> {

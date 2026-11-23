@@ -9,6 +9,7 @@ import {
   X,
   Clock,
   Ban,
+  Sparkles,
 } from 'lucide-react';
 import { usePOS } from '../../hooks/usePOS';
 import { useCustomers } from '../../hooks/useCustomers';
@@ -23,12 +24,21 @@ import {
   CheckoutCompletionPayload,
   UgandaCheckoutModal,
 } from '../../components/checkout/UgandaCheckoutModal';
+import { SmartImportModal } from '../../components/shared/SmartImportModal';
+import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import { cn } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
 export default function SalesHistory() {
   const { user, tenant } = useAuthStore();
-  const { sales, refundSale, settlePendingSale } = usePOS();
+  const {
+    sales,
+    isLoading,
+    refundSale,
+    settlePendingSale,
+    bulkImportSales,
+    bulkImportRefunds,
+  } = usePOS();
   const { customers } = useCustomers();
   const { activeBranchId, activeBranch } = useBranches();
 
@@ -39,6 +49,7 @@ export default function SalesHistory() {
   const [refundReason, setRefundReason] = useState('');
   const [settleTarget, setSettleTarget] = useState<Sale | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [importEntity, setImportEntity] = useState<'sales' | 'refunds' | null>(null);
 
   const canManageSales = user?.role === 'admin' || user?.role === 'manager';
 
@@ -134,6 +145,26 @@ export default function SalesHistory() {
             Inspect receipts, settle pending invoices, or issue audited refunds.
           </p>
         </div>
+        {canManageSales && (
+          <div className="flex flex-wrap gap-2.5">
+            <button
+              type="button"
+              onClick={() => setImportEntity('sales')}
+              className="btn btn-secondary gap-1.5 text-xs sm:text-sm whitespace-nowrap"
+            >
+              <Sparkles size={16} className="text-accent" />
+              Import Sales
+            </button>
+            <button
+              type="button"
+              onClick={() => setImportEntity('refunds')}
+              className="btn btn-secondary gap-1.5 text-xs sm:text-sm whitespace-nowrap"
+            >
+              <RotateCcw size={16} className="text-danger" />
+              Import Refunds
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 no-print">
@@ -184,7 +215,7 @@ export default function SalesHistory() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-1 p-1 bg-white border border-border rounded-lg self-start sm:self-auto">
+          <div className="flex items-center gap-1 p-1 bg-white border border-border rounded-lg self-start sm:self-auto max-w-full overflow-x-auto">
             {(['all', 'completed', 'pending', 'refunded'] as const).map((status) => (
               <button
                 key={status}
@@ -203,7 +234,7 @@ export default function SalesHistory() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto hidden md:block">
           <table className="w-full text-left border-collapse min-w-[820px]">
             <thead>
               <tr className="bg-surface-alt/50 border-b border-border text-xs font-bold text-text-muted uppercase tracking-wider">
@@ -217,7 +248,9 @@ export default function SalesHistory() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border text-sm">
-              {filteredSales.length === 0 ? (
+              {isLoading ? (
+                <TableRowsSkeleton rows={6} columns={7} />
+              ) : filteredSales.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-6 py-12 text-center text-text-muted">
                     No matching sales records found
@@ -300,27 +333,116 @@ export default function SalesHistory() {
             </tbody>
           </table>
         </div>
+
+        {/* Mobile List View */}
+        <div className="md:hidden divide-y divide-border">
+          {isLoading ? (
+            <MobileListSkeleton cards={5} />
+          ) : filteredSales.length === 0 ? (
+            <div className="p-10 text-center text-text-muted text-sm">
+              No matching sales records found
+            </div>
+          ) : (
+            filteredSales.map((sale) => {
+              const cust = sale.customerId ? customerMap.get(sale.customerId) : null;
+              return (
+                <div key={sale.id} className="p-4 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-primary font-mono truncate">
+                        {sale.reference}
+                      </p>
+                      <p className="text-xs text-text-muted truncate">
+                        {formatDate(sale.createdAt)}
+                        {sale.branchName ? ` · ${sale.branchName}` : ''}
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        'text-[11px] font-bold uppercase shrink-0',
+                        sale.status === 'completed'
+                          ? 'text-accent'
+                          : sale.status === 'pending'
+                          ? 'text-accent-alt'
+                          : 'text-danger'
+                      )}
+                    >
+                      {sale.status}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-primary truncate">
+                        {cust ? cust.name : 'Walk-in Customer'}
+                      </p>
+                      <p className="text-xs text-text-secondary">
+                        {sale.items.reduce((acc, i) => acc + i.quantity, 0)} units · {sale.paymentMethod}
+                      </p>
+                    </div>
+                    <p className="text-base font-bold text-primary font-mono tabular-nums shrink-0">
+                      {formatUGX(sale.total)}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-border/60">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSale(sale)}
+                      className="btn btn-secondary text-xs py-1.5 px-3 min-h-[36px] whitespace-nowrap"
+                    >
+                      Receipt
+                    </button>
+                    {canManageSales && sale.status === 'pending' && (
+                      <button
+                        type="button"
+                        onClick={() => setSettleTarget(sale)}
+                        className="btn btn-primary text-xs py-1.5 px-3 min-h-[36px] whitespace-nowrap"
+                      >
+                        Collect Pay
+                      </button>
+                    )}
+                    {canManageSales && sale.status !== 'refunded' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRefundTarget(sale);
+                          setRefundReason('');
+                        }}
+                        aria-label={`Refund ${sale.reference}`}
+                        className="btn btn-secondary text-xs py-1.5 px-2.5 min-h-[36px] text-danger hover:bg-danger/10"
+                      >
+                        <RotateCcw size={14} />
+                        Refund
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
 
       {/* Receipt Inspection Modal */}
       {selectedSale && tenant && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white no-print">
-              <div className="flex items-center gap-2">
-                <Receipt size={20} />
-                <h3 className="text-lg font-bold text-white">Receipt · {selectedSale.reference}</h3>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0 no-print">
+              <div className="flex items-center gap-2 min-w-0">
+                <Receipt size={20} className="shrink-0" />
+                <h3 className="text-lg font-bold text-white truncate">Receipt · {selectedSale.reference}</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedSale(null)}
-                className="p-1 hover:bg-white/10 rounded-lg"
+                className="p-1 hover:bg-white/10 rounded-lg shrink-0"
               >
                 <X size={20} />
               </button>
             </div>
 
-            <div className="p-6 space-y-4 print-content">
+            <div className="p-6 space-y-4 print-content overflow-y-auto flex-1">
               <div className="text-center border-b border-border pb-4">
                 {tenant.logo && (
                   <img
@@ -342,6 +464,9 @@ export default function SalesHistory() {
                 )}
                 {selectedSale.branchName && (
                   <p className="text-xs text-text-muted">Branch: {selectedSale.branchName}</p>
+                )}
+                {selectedSale.cashierName && (
+                  <p className="text-xs text-text-muted">Cashier: {selectedSale.cashierName}</p>
                 )}
                 <p className="text-xs text-text-muted mt-1">
                   {selectedSale.reference} · {new Date(selectedSale.createdAt).toLocaleString()}
@@ -430,7 +555,7 @@ export default function SalesHistory() {
               </div>
             </div>
 
-            <div className="p-4 bg-surface-alt border-t border-border flex flex-wrap gap-2 no-print">
+            <div className="p-4 bg-surface-alt border-t border-border flex flex-wrap gap-2 shrink-0 no-print">
               {tenant.preferences?.whatsappReceipts !== false &&
                 canAccessFeature(tenant, 'whatsappReceipts') && (
                   <a
@@ -463,18 +588,18 @@ export default function SalesHistory() {
       {/* Refund Confirmation Modal */}
       {refundTarget && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-danger text-white">
-              <h3 className="text-lg font-bold text-white">Refund {refundTarget.reference}</h3>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-danger text-white shrink-0">
+              <h3 className="text-lg font-bold text-white truncate pr-2">Refund {refundTarget.reference}</h3>
               <button
                 type="button"
                 onClick={() => setRefundTarget(null)}
-                className="p-1 hover:bg-white/10 rounded-lg"
+                className="p-1 hover:bg-white/10 rounded-lg shrink-0"
               >
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleConfirmRefund} className="p-6 space-y-4">
+            <form onSubmit={handleConfirmRefund} className="p-6 space-y-4 overflow-y-auto flex-1">
               <p className="text-sm text-text-secondary">
                 Refunding restores sold item quantities back into branch inventory and reverses any customer
                 credit balance of{' '}
@@ -533,6 +658,20 @@ export default function SalesHistory() {
         onClose={() => setSettleTarget(null)}
         onConfirm={handleConfirmSettle}
       />
+
+      {importEntity && (
+        <SmartImportModal
+          isOpen={Boolean(importEntity)}
+          entityType={importEntity}
+          onClose={() => setImportEntity(null)}
+          onCommit={async (rows, opts) => {
+            if (importEntity === 'refunds') {
+              return bulkImportRefunds(rows, { restoreStock: opts.restoreStock });
+            }
+            return bulkImportSales(rows, { deductStock: opts.deductStock });
+          }}
+        />
+      )}
     </div>
   );
 }

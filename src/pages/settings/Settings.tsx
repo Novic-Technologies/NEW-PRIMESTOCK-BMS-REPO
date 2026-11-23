@@ -18,9 +18,11 @@ import {
   RefreshCw,
   AlertTriangle,
   X,
+  Download,
 } from 'lucide-react';
-import { deleteField, doc, updateDoc } from 'firebase/firestore';
+import { collection, deleteField, doc, getDocs, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebase';
+import { localDb } from '../../services/db';
 import { useAuthStore } from '../../store/authStore';
 import { useAuth } from '../../hooks/useAuth';
 import { useTrialGuard } from '../../hooks/useTrialGuard';
@@ -28,6 +30,7 @@ import { logWorkspaceAudit } from '../../hooks/useAuditLog';
 import { Tenant, TenantBranding, TenantPreferences } from '../../types';
 import { stripUndefined } from '../../utils/firestoreUtils';
 import { printViaThermalSerial } from '../../utils/thermalPrint';
+import { canAccessFeature } from '../../utils/planLimits';
 import { handleFirestoreError, OperationType } from '../../utils/errorHandlers';
 import {
   BRAND_PRESETS,
@@ -154,6 +157,8 @@ export default function Settings() {
     website: '',
   });
 
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
+
   const [prefs, setPrefs] = useState<TenantPreferences>({
     mtnMomoEnabled: true,
     mtnMerchantCode: '',
@@ -161,7 +166,6 @@ export default function Settings() {
     airtelMerchantCode: '',
     whatsappReceipts: true,
     thermalPrinterName: '',
-    twoFactorRequired: false,
     staffPinsEnabled: false,
     receiptFooter: '',
     taxEnabled: false,
@@ -206,7 +210,6 @@ export default function Settings() {
       airtelMerchantCode: tenant.preferences?.airtelMerchantCode || '',
       whatsappReceipts: tenant.preferences?.whatsappReceipts ?? true,
       thermalPrinterName: tenant.preferences?.thermalPrinterName || '',
-      twoFactorRequired: tenant.preferences?.twoFactorRequired ?? false,
       staffPinsEnabled: tenant.preferences?.staffPinsEnabled ?? false,
       receiptFooter: tenant.preferences?.receiptFooter || '',
       taxEnabled: tenant.preferences?.taxEnabled ?? false,
@@ -216,6 +219,7 @@ export default function Settings() {
   }, [tenant]);
 
   const isAdmin = user?.role === 'admin';
+  const canUseWhatsappReceipts = canAccessFeature(tenant, 'whatsappReceipts');
 
   const previewPrimary = isValidHexColor(branding.primaryColor)
     ? branding.primaryColor
@@ -290,7 +294,7 @@ export default function Settings() {
       !isValidHexColor(previewAccent) ||
       !isValidHexColor(previewSecondary)
     ) {
-      toast.error('Please enter valid 6-digit hex color codes (e.g. #0A2540).');
+      toast.error('Please enter valid 6-digit hex color codes (e.g. #0B1F3A).');
       return;
     }
 
@@ -298,6 +302,7 @@ export default function Settings() {
     const tenantPath = `tenants/${tenant.id}`;
     const cleanedPrefs = stripUndefined<TenantPreferences>({
       ...prefs,
+      whatsappReceipts: canUseWhatsappReceipts ? Boolean(prefs.whatsappReceipts) : false,
       mtnMerchantCode: prefs.mtnMerchantCode?.trim() || undefined,
       airtelMerchantCode: prefs.airtelMerchantCode?.trim() || undefined,
       thermalPrinterName: prefs.thermalPrinterName?.trim() || undefined,
@@ -448,6 +453,143 @@ export default function Settings() {
       setDeleteError(res.error || 'Account deletion failed. Please try again.');
     } else {
       setShowDeleteModal(false);
+    }
+  };
+
+  const handleExportWorkspaceBackup = async () => {
+    if (!tenant || !user || !isAdmin || isExportingBackup) return;
+    setIsExportingBackup(true);
+    try {
+      const fetchCollection = async <T extends object>(
+        subName: string,
+        fallbackLocal: () => Promise<T[]>
+      ): Promise<T[]> => {
+        if (navigator.onLine) {
+          try {
+            const snap = await getDocs(collection(db, `tenants/${tenant.id}/${subName}`));
+            return snap.docs.map((d) => d.data() as T);
+          } catch {
+            // Fall through to local offline cache
+          }
+        }
+        return fallbackLocal().catch(() => []);
+      };
+
+      const [
+        branches,
+        rawMembers,
+        products,
+        sales,
+        customers,
+        suppliers,
+        purchaseOrders,
+        expenses,
+        creditPayments,
+        shifts,
+        stockTransfers,
+        stockAdjustments,
+        payrollRuns,
+        billingHistory,
+        auditLogs,
+      ] = await Promise.all([
+        fetchCollection('branches', () => localDb.branches.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('members', () => localDb.members.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('products', () => localDb.products.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('sales', () => localDb.sales.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('customers', () => localDb.customers.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('suppliers', () => localDb.suppliers.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('purchaseOrders', () => localDb.purchaseOrders.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('expenses', () => localDb.expenses.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('creditPayments', () => localDb.creditPayments.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('shifts', () => localDb.shifts.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('stockTransfers', () => localDb.stockTransfers.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('stockAdjustments', () => localDb.stockAdjustments.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('payrollRuns', () => localDb.payrollRuns.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('billingHistory', () => localDb.billingHistory.where('tenantId').equals(tenant.id).toArray()),
+        fetchCollection('auditLogs', () => localDb.auditLogs.where('tenantId').equals(tenant.id).toArray()),
+      ]);
+
+      const safeMembers = rawMembers.map((m) => {
+        const { posPinHash: _omittedPinHash, ...safeMember } = m;
+        void _omittedPinHash;
+        return safeMember;
+      });
+
+      const backupPayload = {
+        exportedAt: new Date().toISOString(),
+        exportedBy: {
+          uid: user.uid,
+          name: user.name,
+          email: user.email,
+        },
+        workspace: tenant,
+        counts: {
+          branches: branches.length,
+          members: safeMembers.length,
+          products: products.length,
+          sales: sales.length,
+          customers: customers.length,
+          suppliers: suppliers.length,
+          purchaseOrders: purchaseOrders.length,
+          expenses: expenses.length,
+          creditPayments: creditPayments.length,
+          shifts: shifts.length,
+          stockTransfers: stockTransfers.length,
+          stockAdjustments: stockAdjustments.length,
+          payrollRuns: payrollRuns.length,
+          billingHistory: billingHistory.length,
+          auditLogs: auditLogs.length,
+        },
+        data: {
+          branches,
+          members: safeMembers,
+          products,
+          sales,
+          customers,
+          suppliers,
+          purchaseOrders,
+          expenses,
+          creditPayments,
+          shifts,
+          stockTransfers,
+          stockAdjustments,
+          payrollRuns,
+          billingHistory,
+          auditLogs,
+        },
+      };
+
+      const blob = new Blob([JSON.stringify(backupPayload, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const slug = tenant.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'workspace';
+      a.href = url;
+      a.download = `primestock-backup-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      void logWorkspaceAudit({
+        tenantId: tenant.id,
+        branchId: user.branchId,
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        action: 'WORKSPACE_BACKUP_EXPORTED',
+        entityType: 'settings',
+        entityId: tenant.id,
+        summary: `Downloaded full JSON workspace backup (${products.length} products, ${sales.length} sales, ${customers.length} customers)`,
+      });
+
+      toast.success('Full workspace backup downloaded!');
+    } catch (error) {
+      console.error('Workspace backup failed:', error);
+      toast.error('Failed to export workspace backup');
+    } finally {
+      setIsExportingBackup(false);
     }
   };
 
@@ -730,7 +872,7 @@ export default function Settings() {
                         primaryColor: e.target.value,
                       })
                     }
-                    className="input min-h-[36px] text-xs font-mono uppercase px-2"
+                    className="input-sm font-mono uppercase px-2"
                     maxLength={7}
                   />
                 </div>
@@ -763,7 +905,7 @@ export default function Settings() {
                         accentColor: e.target.value,
                       })
                     }
-                    className="input min-h-[36px] text-xs font-mono uppercase px-2"
+                    className="input-sm font-mono uppercase px-2"
                     maxLength={7}
                   />
                 </div>
@@ -796,7 +938,7 @@ export default function Settings() {
                         secondaryAccentColor: e.target.value,
                       })
                     }
-                    className="input min-h-[36px] text-xs font-mono uppercase px-2"
+                    className="input-sm font-mono uppercase px-2"
                     maxLength={7}
                   />
                 </div>
@@ -835,7 +977,7 @@ export default function Settings() {
                   Open POS
                 </span>
               </div>
-              <div className="px-4 py-3 flex items-center justify-between gap-3 bg-[#F7F9FC] text-xs">
+              <div className="px-4 py-3 flex items-center justify-between gap-3 bg-[#EDF1F6] text-xs">
                 <div className="flex items-center gap-2">
                   <Sparkles size={14} style={{ color: previewSecondary }} />
                   <span className="font-semibold" style={{ color: previewPrimary }}>
@@ -1073,13 +1215,27 @@ export default function Settings() {
 
           <SettingItem
             label="WhatsApp Receipts"
-            description="Include customer receipt summary for quick sharing."
+            description={
+              canUseWhatsappReceipts
+                ? 'Include customer receipt summary for quick sharing.'
+                : 'Requires Starter plan or higher. Upgrade in Billing to unlock WhatsApp receipts.'
+            }
           >
-            <ToggleSwitch
-              checked={!!prefs.whatsappReceipts}
-              onChange={(next) => setPrefs({ ...prefs, whatsappReceipts: next })}
-              label="Toggle WhatsApp Receipts"
-            />
+            {canUseWhatsappReceipts ? (
+              <ToggleSwitch
+                checked={!!prefs.whatsappReceipts}
+                onChange={(next) => setPrefs({ ...prefs, whatsappReceipts: next })}
+                label="Toggle WhatsApp Receipts"
+              />
+            ) : (
+              <Link
+                to="/billing"
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-accent hover:underline whitespace-nowrap"
+              >
+                <Lock size={13} />
+                Upgrade to Starter+
+              </Link>
+            )}
           </SettingItem>
 
           <SettingItem label="Receipt Footer Note" description="Custom message printed below totals.">
@@ -1138,26 +1294,32 @@ export default function Settings() {
 
         <SettingSection
           icon={Shield}
-          title="Security & Roles"
-          description="Manage user permissions and account security."
+          title="Counter &amp; Staff PIN Controls"
+          description="Control fast 4-digit PIN cashier switching for shared retail POS terminals."
         >
           <SettingItem
-            label="Two-Factor Auth"
-            description="Require 2FA policy for admin account access."
+            label="Staff POS Quick-Switch PINs"
+            description="Let cashiers sharing a terminal switch operators via a 4-digit PIN inside POS without logging out. Set each member's PIN in Team & Branches."
           >
-            <ToggleSwitch
-              checked={!!prefs.twoFactorRequired}
-              onChange={(next) => setPrefs({ ...prefs, twoFactorRequired: next })}
-              label="Toggle Two-Factor Policy"
-            />
-          </SettingItem>
-          <SettingItem label="Staff PINs" description="Enable quick POS switch for cashiers.">
             <ToggleSwitch
               checked={!!prefs.staffPinsEnabled}
               onChange={(next) => setPrefs({ ...prefs, staffPinsEnabled: next })}
-              label="Toggle Staff PINs"
+              label="Toggle Staff POS Quick-Switch PINs"
             />
           </SettingItem>
+          {prefs.staffPinsEnabled && (
+            <div className="p-3.5 rounded-xl bg-accent/5 border border-accent/20 text-xs text-primary flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <span>
+                Quick-Switch PIN modal is enabled on the POS screen. Assign 4-digit PINs per team member so receipts &amp; audits record the active cashier.
+              </span>
+              <Link
+                to="/team"
+                className="font-bold text-accent hover:underline whitespace-nowrap shrink-0"
+              >
+                Manage PINs &rarr;
+              </Link>
+            </div>
+          )}
         </SettingSection>
         <SettingSection
           icon={UserCheck}
@@ -1259,43 +1421,71 @@ export default function Settings() {
     </form>
 
     {isAdmin && (
-      <div className="mt-8 card p-6 sm:p-8 border border-danger/30 bg-danger/5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-start gap-4">
-            <div className="p-3 bg-danger/10 text-danger rounded-xl shrink-0">
-              <AlertTriangle size={24} />
+      <div className="mt-8 space-y-5">
+        <div className="card p-6 sm:p-8 border border-border bg-white">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-primary/5 text-primary rounded-xl shrink-0">
+                <Download size={22} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-primary">Download Full Workspace Backup</h3>
+                <p className="text-sm text-text-secondary mt-1 max-w-2xl">
+                  Archive a complete JSON snapshot of your products, sales receipts, customer &amp; supplier ledgers,
+                  purchase orders, expenses, register shifts, payroll runs, audit logs, and workspace settings before making permanent changes.
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-lg font-bold text-danger">Danger Zone · Delete Account &amp; Workspace</h3>
-              <p className="text-sm text-text-secondary mt-1 max-w-2xl">
-                Permanently erase your admin account and every record belonging to{' '}
-                <strong>{tenant?.name || 'your workspace'}</strong> — including all branches,
-                inventory products, sales, customers, suppliers, expenses, payroll runs, staff accounts,
-                invitations, and audit logs. This action cannot be undone.
-              </p>
-            </div>
+            <button
+              type="button"
+              disabled={isExportingBackup}
+              onClick={handleExportWorkspaceBackup}
+              className="btn btn-secondary px-5 py-2.5 text-sm font-bold gap-2 whitespace-nowrap shrink-0"
+            >
+              <Download size={16} />
+              {isExportingBackup ? 'Preparing Archive...' : 'Download Full Backup (JSON)'}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setDeleteConfirmText('');
-              setDeletePassword('');
-              setDeleteError(null);
-              setShowDeleteModal(true);
-            }}
-            className="btn bg-danger text-white hover:bg-danger/90 px-5 py-2.5 text-sm font-bold gap-2 whitespace-nowrap shrink-0"
-          >
-            <Trash2 size={16} />
-            Delete Account
-          </button>
+        </div>
+
+        <div className="card p-6 sm:p-8 border border-danger/30 bg-danger/5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-danger/10 text-danger rounded-xl shrink-0">
+                <AlertTriangle size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-danger">Danger Zone · Delete Account &amp; Workspace</h3>
+                <p className="text-sm text-text-secondary mt-1 max-w-2xl">
+                  Permanently erase your admin account and every record belonging to{' '}
+                  <strong>{tenant?.name || 'your workspace'}</strong> — including all branches,
+                  inventory products, sales, customers, suppliers, expenses, payroll runs, staff accounts,
+                  invitations, and audit logs. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteConfirmText('');
+                setDeletePassword('');
+                setDeleteError(null);
+                setShowDeleteModal(true);
+              }}
+              className="btn bg-danger text-white hover:bg-danger/90 px-5 py-2.5 text-sm font-bold gap-2 whitespace-nowrap shrink-0"
+            >
+              <Trash2 size={16} />
+              Delete Account
+            </button>
+          </div>
         </div>
       </div>
     )}
 
     {showDeleteModal && isAdmin && (
-      <div className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-danger/25">
-          <div className="p-5 bg-danger text-white flex items-center justify-between">
+      <div className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-danger/25 flex flex-col max-h-[90dvh]">
+          <div className="p-5 bg-danger text-white flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2.5">
               <AlertTriangle size={20} />
               <h3 className="font-bold text-lg text-white">Permanent Workspace Deletion</h3>
@@ -1310,7 +1500,7 @@ export default function Settings() {
             </button>
           </div>
 
-          <form onSubmit={handleConfirmDeleteAccount} className="p-6 space-y-4">
+          <form onSubmit={handleConfirmDeleteAccount} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
             <div className="p-3.5 rounded-lg bg-danger/5 border border-danger/20 text-xs text-danger space-y-1">
               <p className="font-bold">All data for {tenant?.name} will be wiped permanently:</p>
               <p>

@@ -9,12 +9,14 @@ export interface BrandThemePreset {
   secondaryAccentColor: string;
 }
 
+export const SYSTEM_LOGO_URL = '/assets/aistudio/Minimalist_Navy_Monogram_Emblem_804982e2.png';
+
 export const DEFAULT_BRANDING: Required<
   Pick<TenantBranding, 'primaryColor' | 'accentColor' | 'secondaryAccentColor' | 'presetId'>
 > = {
-  primaryColor: '#0A2540',
-  accentColor: '#00C37F',
-  secondaryAccentColor: '#F5A623',
+  primaryColor: '#0B1F3A',
+  accentColor: '#0F766E',
+  secondaryAccentColor: '#B45309',
   presetId: 'kampala_navy',
 };
 
@@ -22,10 +24,10 @@ export const BRAND_PRESETS: BrandThemePreset[] = [
   {
     id: 'kampala_navy',
     name: 'Kampala Executive',
-    description: 'Deep marine navy with emerald action highlights',
-    primaryColor: '#0A2540',
-    accentColor: '#00C37F',
-    secondaryAccentColor: '#F5A623',
+    description: 'Deep executive navy with restrained slate-teal actions',
+    primaryColor: '#0B1F3A',
+    accentColor: '#0F766E',
+    secondaryAccentColor: '#B45309',
   },
   {
     id: 'emerald_fresh',
@@ -107,8 +109,8 @@ export function applyTenantTheme(tenant: Tenant | null) {
     : 'PRIMESTOCK BMS UG';
 
   const faviconEl = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
-  if (faviconEl && tenant?.logo) {
-    faviconEl.href = tenant.logo;
+  if (faviconEl) {
+    faviconEl.href = tenant?.logo || SYSTEM_LOGO_URL;
   }
 }
 

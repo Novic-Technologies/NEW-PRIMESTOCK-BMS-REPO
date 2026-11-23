@@ -4,11 +4,13 @@ import { Clock, Lock, ArrowRight, Gift, Bell, X } from 'lucide-react';
 import { useTrialGuard } from '../../hooks/useTrialGuard';
 import { useAuthStore } from '../../store/authStore';
 import { hasSectionAccess } from '../../utils/rbac';
+import { getTrialDaysCount } from '../../utils/planLimits';
 import { cn } from '../../lib/utils';
 
 export function TrialBanner() {
-  const { tenant, user } = useAuthStore();
+  const { tenant, user, isMasterAdmin } = useAuthStore();
   const canManageBilling = hasSectionAccess(user, 'billing');
+  const trialDaysCount = getTrialDaysCount();
   const {
     isTrial,
     isActive,
@@ -32,7 +34,7 @@ export function TrialBanner() {
 
   const showTrialBanner = isTrial || isSoftLocked || showPaidRenewalWarning || isComplimentary;
 
-  if (!showTrialBanner && !hasReminder) return null;
+  if (isMasterAdmin || (!showTrialBanner && !hasReminder)) return null;
 
   return (
     <div className="no-print">
@@ -94,7 +96,7 @@ export function TrialBanner() {
                 </>
               ) : (
                 <>
-                  <strong>14-Day Free Trial Ended:</strong> All your sales, products, and customer records
+                  <strong>{trialDaysCount}-Day Free Trial Ended:</strong> All your sales, products, and customer records
                   are safely preserved. Submit plan payment in Billing for Master Admin approval to unlock
                   full access.
                 </>
@@ -157,7 +159,7 @@ export function TrialBanner() {
               className={daysRemaining <= 3 ? 'text-accent-alt shrink-0' : 'text-accent shrink-0'}
             />
             <span>
-              14-Day Free Trial ·{' '}
+              {trialDaysCount}-Day Free Trial ·{' '}
               <strong className="font-mono tabular-nums">
                 {daysRemaining <= 1
                   ? `${hoursRemaining} ${hoursRemaining === 1 ? 'hour' : 'hours'} remaining`

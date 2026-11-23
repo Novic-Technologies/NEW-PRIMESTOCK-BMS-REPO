@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -9,22 +10,27 @@ import {
   AlertCircle,
   Edit2,
   Trash2,
-  Upload,
+  Sparkles,
   ArrowRightLeft,
   ClipboardCheck,
   X,
+  Lock,
+  Camera,
 } from 'lucide-react';
 import { useInventory } from '../../hooks/useInventory';
 import { useStockOperations } from '../../hooks/useStockOperations';
 import { useBranches } from '../../hooks/useBranches';
 import { useAuthStore } from '../../store/authStore';
+import { computeStockDiscrepanciesAndDuplicates } from '../../utils/aiAnalytics';
 import { formatUGX } from '../../utils/format';
 import { getEffectiveStock } from '../../utils/branchStock';
-import { canAccessFeature } from '../../utils/planLimits';
+import { canAccessFeature, getEffectivePlanQuota, isQuotaExceeded } from '../../utils/planLimits';
 import { canManageInventoryData } from '../../utils/rbac';
 import { downloadCsv } from '../../utils/exportCsv';
 import { cn } from '../../lib/utils';
 import { NewProductModal } from '../../components/inventory/NewProductModal';
+import { SmartImportModal } from '../../components/shared/SmartImportModal';
+import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import { Product, StockAdjustment } from '../../types';
 import toast from 'react-hot-toast';
 
@@ -41,11 +47,13 @@ export default function Products() {
   const { user, tenant } = useAuthStore();
   const { products, isLoading, bulkImportProducts, deleteProduct } = useInventory();
   const { branches, activeBranchId } = useBranches();
-  const { transfers, recordAdjustment, transferStock } = useStockOperations();
+  const { transfers, adjustments, recordAdjustment, transferStock } = useStockOperations();
 
   const canManage = canManageInventoryData(user);
   const isAdmin = user?.role === 'admin';
   const effectiveBranchId = activeBranchId && activeBranchId !== 'ALL' ? activeBranchId : null;
+  const planQuota = getEffectivePlanQuota(tenant);
+  const skuLimitReached = isQuotaExceeded(products.length, planQuota.maxProducts);
 
   const [search, setSearch] = useState('');
   const [showFilters, setShowFilters] = useState(false);
@@ -69,10 +77,18 @@ export default function Products() {
   const [transferNotes, setTransferNotes] = useState('');
   const [isTransferring, setIsTransferring] = useState(false);
 
-  // Bulk CSV Import Modal
+  // Smart AI Import Modal
   const [isImportOpen, setIsImportOpen] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-  const csvInputRef = useRef<HTMLInputElement>(null);
+
+  const duplicateAlerts = useMemo(
+    () =>
+      computeStockDiscrepanciesAndDuplicates({
+        products,
+        adjustments,
+        branchId: effectiveBranchId,
+      }).duplicates,
+    [products, adjustments, effectiveBranchId]
+  );
 
   const categories = useMemo(() => {
     const set = new Set(products.map((p) => p.category || 'General'));
@@ -148,75 +164,6 @@ export default function Products() {
     toast.success('Inventory exported to CSV');
   };
 
-  const handleDownloadCsvTemplate = () => {
-    downloadCsv(
-      'primestock-import-template.csv',
-      ['name', 'category', 'sku', 'barcode', 'buyingPrice', 'sellingPrice', 'wholesalePrice', 'vipPrice', 'currentStock', 'minStockLevel', 'unit', 'batchNumber', 'expiryDate'],
-      [
-        ['Sugar Kakira 1kg', 'Groceries', 'SUG-001', '6001234567890', 3800, 4500, 4200, 4100, 50, 10, 'kg', 'B-01', '2027-06-30'],
-      ]
-    );
-  };
-
-  const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsImporting(true);
-    try {
-      const text = await file.text();
-      const lines = text
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean);
-      if (lines.length < 2) {
-        toast.error('CSV file must include a header row and at least one product row');
-        return;
-      }
-
-      const headers = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, '').toLowerCase());
-      const rows: Array<Omit<Product, 'id' | 'tenantId' | 'createdAt'>> = [];
-
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
-        const getVal = (key: string) => {
-          const idx = headers.indexOf(key.toLowerCase());
-          return idx >= 0 ? cols[idx] || '' : '';
-        };
-        const name = getVal('name');
-        const sellingPrice = Number(getVal('sellingprice') || getVal('price')) || 0;
-        if (!name || sellingPrice <= 0) continue;
-
-        rows.push({
-          name,
-          category: getVal('category') || 'General',
-          sku: getVal('sku') || undefined,
-          barcode: getVal('barcode') || undefined,
-          buyingPrice: Number(getVal('buyingprice')) || 0,
-          sellingPrice,
-          wholesalePrice: Number(getVal('wholesaleprice')) || undefined,
-          vipPrice: Number(getVal('vipprice')) || undefined,
-          currentStock: Math.max(0, Number(getVal('currentstock') || getVal('stock')) || 0),
-          minStockLevel: Math.max(0, Number(getVal('minstocklevel') || getVal('minstock')) || 5),
-          unit: getVal('unit') || 'pcs',
-          batchNumber: getVal('batchnumber') || undefined,
-          expiryDate: getVal('expirydate') || undefined,
-          status: 'active',
-        });
-      }
-
-      if (rows.length === 0) {
-        toast.error('No valid rows found (each row requires name and sellingPrice > 0)');
-        return;
-      }
-
-      const count = await bulkImportProducts(rows);
-      if (count > 0) setIsImportOpen(false);
-    } finally {
-      setIsImporting(false);
-      if (csvInputRef.current) csvInputRef.current.value = '';
-    }
-  };
-
   const openAdjustModal = (product: Product) => {
     setAdjustTarget(product);
     setAdjustNewStock(String(getEffectiveStock(product, effectiveBranchId)));
@@ -275,6 +222,12 @@ export default function Products() {
   };
 
   const openCreateModal = () => {
+    if (skuLimitReached) {
+      toast.error(
+        `${planQuota.name} plan limit (${planQuota.maxProducts.toLocaleString()} products) reached. Upgrade in Billing to add more.`
+      );
+      return;
+    }
     setEditingProduct(null);
     setIsModalOpen(true);
   };
@@ -304,26 +257,71 @@ export default function Products() {
           </button>
           {canManage && (
             <>
-              <button
-                type="button"
-                onClick={() => setIsImportOpen(true)}
+              <Link
+                to="/ai?tab=inventory"
                 className="btn btn-secondary gap-2 text-xs sm:text-sm justify-center whitespace-nowrap"
               >
-                <Upload size={17} />
-                <span>CSV Import</span>
+                <Camera size={16} className="text-accent" />
+                <span>AI Stocktake</span>
+              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  if (skuLimitReached) {
+                    toast.error(
+                      `${planQuota.name} plan limit (${planQuota.maxProducts.toLocaleString()} products) reached. Upgrade in Billing.`
+                    );
+                    return;
+                  }
+                  setIsImportOpen(true);
+                }}
+                className={cn(
+                  'btn btn-secondary gap-2 text-xs sm:text-sm justify-center whitespace-nowrap',
+                  skuLimitReached && 'opacity-60'
+                )}
+              >
+                <Sparkles size={16} className="text-accent" />
+                <span>Smart Import</span>
               </button>
               <button
                 type="button"
-                className="btn btn-primary gap-2 text-xs sm:text-sm justify-center whitespace-nowrap"
+                className={cn(
+                  'btn btn-primary gap-2 text-xs sm:text-sm justify-center whitespace-nowrap',
+                  skuLimitReached && 'opacity-70'
+                )}
                 onClick={openCreateModal}
               >
-                <Plus size={18} />
+                {skuLimitReached ? <Lock size={16} /> : <Plus size={18} />}
                 <span>Add Product</span>
               </button>
             </>
           )}
         </div>
       </div>
+
+      {duplicateAlerts.length > 0 && canManage && (
+        <div className="p-3.5 rounded-xl bg-surface-alt border border-border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+          <span className="text-primary font-medium">
+            Detected <strong>{duplicateAlerts.length}</strong> possible near-duplicate SKU pair(s) (e.g. &ldquo;{duplicateAlerts[0].primaryName}&rdquo; &amp; &ldquo;{duplicateAlerts[0].duplicateName}&rdquo;).
+          </span>
+          <Link to="/ai?tab=inventory" className="font-bold text-accent hover:underline whitespace-nowrap">
+            Review &amp; Merge in AI Suite →
+          </Link>
+        </div>
+      )}
+
+      {skuLimitReached && (
+        <div className="p-3.5 rounded-xl bg-accent-alt/10 border border-accent-alt/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+          <span className="text-primary font-medium">
+            Product SKU limit reached for <strong>{planQuota.name}</strong> ({products.length.toLocaleString()} / {planQuota.maxProducts.toLocaleString()}).
+          </span>
+          {isAdmin && (
+            <Link to="/billing" className="font-bold text-accent hover:underline whitespace-nowrap">
+              Upgrade Subscription in Billing →
+            </Link>
+          )}
+        </div>
+      )}
 
       <NewProductModal
         isOpen={isModalOpen}
@@ -340,9 +338,11 @@ export default function Products() {
             <Package size={24} />
           </div>
           <div className="min-w-0">
-            <p className="text-text-muted text-xs font-medium uppercase tracking-wider">Total Products</p>
+            <p className="text-text-muted text-xs font-medium uppercase tracking-wider">
+              Products ({planQuota.name})
+            </p>
             <h3 className="text-xl sm:text-2xl font-bold text-primary font-mono tabular-nums truncate">
-              {products.length}
+              {products.length.toLocaleString()} / {Number.isFinite(planQuota.maxProducts) ? planQuota.maxProducts.toLocaleString() : '∞'}
             </h3>
           </div>
         </div>
@@ -411,7 +411,7 @@ export default function Products() {
                 aria-label="Filter by category"
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value)}
-                className="input w-auto min-h-[38px] text-sm py-1.5"
+                className="input-sm w-full sm:w-auto"
               >
                 {categories.map((c) => (
                   <option key={c} value={c}>
@@ -425,7 +425,7 @@ export default function Products() {
                 onChange={(e) =>
                   setStockFilter(e.target.value as 'all' | 'low' | 'out' | 'expiring')
                 }
-                className="input w-auto min-h-[38px] text-sm py-1.5"
+                className="input-sm w-full sm:w-auto"
               >
                 <option value="all">All Stock Levels</option>
                 <option value="low">Low Stock Only</option>
@@ -436,7 +436,7 @@ export default function Products() {
           )}
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto hidden md:block">
           <table className="w-full text-left border-collapse min-w-[880px]">
             <thead>
               <tr className="bg-surface-alt/50 border-b border-border">
@@ -454,14 +454,7 @@ export default function Products() {
             </thead>
             <tbody className="divide-y divide-border">
               {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
-                    <div className="flex flex-col items-center gap-3">
-                      <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                      <p className="text-text-muted text-sm font-medium">Loading products...</p>
-                    </div>
-                  </td>
-                </tr>
+                <TableRowsSkeleton rows={6} columns={canManage ? 6 : 5} withAvatar />
               ) : filteredProducts.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center">
@@ -588,6 +581,132 @@ export default function Products() {
             </tbody>
           </table>
         </div>
+
+        {/* Mobile List View */}
+        <div className="md:hidden divide-y divide-border">
+          {isLoading ? (
+            <MobileListSkeleton cards={5} />
+          ) : filteredProducts.length === 0 ? (
+            <div className="p-10 text-center flex flex-col items-center gap-3">
+              <Package size={40} className="text-text-muted opacity-25" />
+              <p className="text-text-muted font-medium text-sm">No products found</p>
+              {canManage && (
+                <button type="button" onClick={openCreateModal} className="btn btn-primary text-xs">
+                  Add Your First Product
+                </button>
+              )}
+            </div>
+          ) : (
+            filteredProducts.map((product) => {
+              const stock = getEffectiveStock(product, effectiveBranchId);
+              const isExpiring =
+                Boolean(product.expiryDate) &&
+                new Date(product.expiryDate!).getTime() <= expiryCutoffMs;
+              return (
+                <div key={product.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 bg-surface-alt rounded-lg flex items-center justify-center text-primary font-bold shrink-0">
+                        {product.name.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-primary truncate">{product.name}</p>
+                        <p className="text-xs text-text-muted truncate">
+                          {product.category || 'General'} · {product.unit}
+                          {product.sku ? ` · ${product.sku}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className={cn(
+                        'text-[11px] font-bold uppercase tracking-wider shrink-0',
+                        product.status === 'active' ? 'text-accent' : 'text-text-muted'
+                      )}
+                    >
+                      {product.status}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                        Selling / Cost
+                      </p>
+                      <p className="font-mono tabular-nums font-bold text-primary mt-0.5">
+                        {formatUGX(product.sellingPrice)}
+                      </p>
+                      <p className="font-mono tabular-nums text-[11px] text-text-muted">
+                        Cost: {formatUGX(product.buyingPrice)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                        In Stock
+                      </p>
+                      <p
+                        className={cn(
+                          'font-mono tabular-nums font-bold mt-0.5',
+                          stock <= product.minStockLevel ? 'text-danger' : 'text-primary'
+                        )}
+                      >
+                        {stock} {product.unit}
+                      </p>
+                      <p className="text-[11px] text-text-muted">
+                        Min: {product.minStockLevel}
+                        {product.expiryDate && (
+                          <span className={cn('ml-1.5 font-semibold', isExpiring && 'text-danger')}>
+                            · Exp {product.expiryDate}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  {canManage && (
+                    <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 border-t border-border/60">
+                      <button
+                        type="button"
+                        onClick={() => openAdjustModal(product)}
+                        className="btn btn-secondary py-1.5 px-2.5 min-h-[36px] text-xs gap-1"
+                      >
+                        <ClipboardCheck size={14} className="text-accent" />
+                        Adjust
+                      </button>
+                      {branches.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => openTransferModal(product)}
+                          className="btn btn-secondary py-1.5 px-2.5 min-h-[36px] text-xs gap-1"
+                        >
+                          <ArrowRightLeft size={14} />
+                          Transfer
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(product)}
+                        aria-label={`Edit ${product.name}`}
+                        className="p-2 text-text-muted hover:text-primary rounded-lg hover:bg-surface-alt"
+                      >
+                        <Edit2 size={16} />
+                      </button>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => deleteProduct(product.id)}
+                          aria-label={`Delete ${product.name}`}
+                          className="p-2 text-text-muted hover:text-danger rounded-lg hover:bg-danger/10"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
 
       {/* Recent Inter-Branch Transfers Log */}
@@ -618,18 +737,18 @@ export default function Products() {
       {/* Logged Stock Adjustment Modal */}
       {adjustTarget && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
-              <h3 className="text-lg font-bold text-white">Adjust Stock · {adjustTarget.name}</h3>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
+              <h3 className="text-lg font-bold text-white truncate pr-2">Adjust Stock · {adjustTarget.name}</h3>
               <button
                 type="button"
                 onClick={() => setAdjustTarget(null)}
-                className="p-1 hover:bg-white/10 rounded-lg"
+                className="p-1 hover:bg-white/10 rounded-lg shrink-0"
               >
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleConfirmAdjustment} className="p-6 space-y-4">
+            <form onSubmit={handleConfirmAdjustment} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="p-3.5 bg-surface-alt rounded-xl flex justify-between text-sm">
                 <span className="text-text-secondary">Current Branch Stock</span>
                 <span className="font-mono font-bold text-primary">
@@ -694,19 +813,19 @@ export default function Products() {
       {/* Inter-Branch Stock Transfer Modal */}
       {transferTarget && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
-              <h3 className="text-lg font-bold text-white">Transfer Stock · {transferTarget.name}</h3>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
+              <h3 className="text-lg font-bold text-white truncate pr-2">Transfer Stock · {transferTarget.name}</h3>
               <button
                 type="button"
                 onClick={() => setTransferTarget(null)}
-                className="p-1 hover:bg-white/10 rounded-lg"
+                className="p-1 hover:bg-white/10 rounded-lg shrink-0"
               >
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleConfirmTransfer} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+            <form onSubmit={handleConfirmTransfer} className="p-6 space-y-4 overflow-y-auto flex-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-bold text-primary mb-1">From Branch *</label>
                   <select
@@ -779,53 +898,40 @@ export default function Products() {
         </div>
       )}
 
-      {/* Bulk CSV Import Modal */}
-      {isImportOpen && (
-        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
-              <h3 className="text-lg font-bold text-white">Bulk CSV Product Import</h3>
-              <button
-                type="button"
-                onClick={() => setIsImportOpen(false)}
-                className="p-1 hover:bg-white/10 rounded-lg"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              <p className="text-sm text-text-secondary">
-                Upload a CSV file containing product columns (<code>name</code> and{' '}
-                <code>sellingPrice</code> required). Stock is seeded to your active branch automatically.
-              </p>
-              <button
-                type="button"
-                onClick={handleDownloadCsvTemplate}
-                className="btn btn-secondary w-full gap-2 text-xs"
-              >
-                <Download size={15} />
-                Download Sample CSV Template
-              </button>
-              <input
-                ref={csvInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={handleCsvUpload}
-              />
-              <button
-                type="button"
-                disabled={isImporting}
-                onClick={() => csvInputRef.current?.click()}
-                className="btn btn-primary w-full gap-2"
-              >
-                <Upload size={17} />
-                {isImporting ? 'Importing CSV...' : 'Choose CSV File & Import'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Smart AI Product Import Modal */}
+      <SmartImportModal
+        isOpen={isImportOpen}
+        entityType="products"
+        onClose={() => setIsImportOpen(false)}
+        quotaNotice={
+          Number.isFinite(planQuota.maxProducts)
+            ? `${planQuota.name} plan allows up to ${planQuota.maxProducts.toLocaleString()} products (${Math.max(
+                0,
+                planQuota.maxProducts - products.length
+              ).toLocaleString()} slot(s) remaining).`
+            : undefined
+        }
+        onCommit={async (importedRows) => {
+          return bulkImportProducts(
+            importedRows.map((r) => ({
+              name: String(r.name || ''),
+              category: String(r.category || 'General'),
+              sku: r.sku ? String(r.sku) : undefined,
+              barcode: r.barcode ? String(r.barcode) : undefined,
+              buyingPrice: Number(r.buyingPrice) || 0,
+              sellingPrice: Number(r.sellingPrice) || 0,
+              wholesalePrice: r.wholesalePrice ? Number(r.wholesalePrice) : undefined,
+              vipPrice: r.vipPrice ? Number(r.vipPrice) : undefined,
+              currentStock: Math.max(0, Number(r.currentStock) || 0),
+              minStockLevel: Math.max(0, Number(r.minStockLevel ?? 5) || 0),
+              unit: String(r.unit || 'pcs'),
+              batchNumber: r.batchNumber ? String(r.batchNumber) : undefined,
+              expiryDate: r.expiryDate ? String(r.expiryDate) : undefined,
+              status: r.status === 'inactive' ? 'inactive' : 'active',
+            }))
+          );
+        }}
+      />
     </div>
   );
 }

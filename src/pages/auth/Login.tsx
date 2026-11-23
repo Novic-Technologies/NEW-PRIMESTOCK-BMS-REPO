@@ -5,6 +5,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useAuthStore } from '../../store/authStore';
 import { PrimeStockLogo } from '../../components/shared/PrimeStockLogo';
 import { getDefaultRouteForUser } from '../../utils/rbac';
+import { getTrialDaysCount } from '../../utils/planLimits';
 
 type AuthMode = 'signin' | 'signup' | 'reset';
 
@@ -117,11 +118,12 @@ export default function Login() {
     }
   };
 
+  const trialDaysCount = getTrialDaysCount();
   const headingText =
     mode === 'signin'
       ? 'Welcome Back'
       : mode === 'signup'
-      ? 'Start Your 14-Day Free Trial'
+      ? `Start Your ${trialDaysCount}-Day Free Trial`
       : 'Reset Your Password';
 
   const subtitleText =
@@ -132,24 +134,24 @@ export default function Login() {
       : 'Enter your account email and we will send you a password reset link.';
 
   return (
-    <div className="min-h-screen flex items-stretch bg-white">
+    <div className="min-h-screen flex items-stretch bg-[#EDF1F6]">
       {/* Left Panel - Branding */}
-      <div className="hidden lg:flex lg:w-1/2 bg-primary p-12 flex-col justify-between relative overflow-hidden">
+      <div className="hidden lg:flex lg:w-1/2 bg-[#0B1F3A] p-12 flex-col justify-between relative overflow-hidden">
         <div className="relative z-10">
           <div className="mb-12">
             <PrimeStockLogo variant="light" size="lg" showTagline />
           </div>
-          <h1 className="text-5xl font-bold text-white leading-tight max-w-md text-balance">
+          <h1 className="text-4xl xl:text-5xl font-bold text-white leading-tight max-w-md text-balance">
             Manage Smarter. <br />
-            <span className="text-accent">Grow Faster.</span>
+            <span className="text-slate-300">Grow Faster.</span>
           </h1>
-          <p className="text-text-muted text-xl mt-6 max-w-sm leading-relaxed">
+          <p className="text-slate-300/80 text-lg mt-6 max-w-sm leading-relaxed">
             The professional, enterprise-grade management system built exclusively for Ugandan businesses.
           </p>
         </div>
 
         <div className="relative z-10">
-          <div className="flex items-center gap-3 text-white/70 text-sm">
+          <div className="flex items-center gap-3 text-slate-300/75 text-sm">
             <span>Offline-First</span>
             <span aria-hidden="true">·</span>
             <span>Multi-Tenant</span>
@@ -158,14 +160,14 @@ export default function Login() {
           </div>
         </div>
 
-        {/* Subtle background accents */}
-        <div className="absolute top-[-10%] right-[-10%] w-[60%] h-[60%] bg-accent/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-[-20%] left-[-10%] w-[80%] h-[80%] bg-accent-alt/5 rounded-full blur-3xl pointer-events-none" />
+        {/* Restrained architectural ambient highlights */}
+        <div className="absolute top-[-10%] right-[-10%] w-[55%] h-[55%] bg-white/[0.04] rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-[-20%] left-[-10%] w-[70%] h-[70%] bg-[#0F766E]/15 rounded-full blur-3xl pointer-events-none" />
       </div>
 
       {/* Right Panel - Auth Form */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center p-6 sm:p-8 lg:p-12 bg-white">
-        <div className="max-w-md w-full">
+      <div className="w-full lg:w-1/2 flex items-center justify-center p-4 sm:p-8 lg:p-12 bg-[#EDF1F6]">
+        <div className="max-w-md w-full bg-[#FBFDFF] border border-border rounded-2xl p-5 sm:p-8 shadow-soft">
           <div className="lg:hidden mb-8">
             <PrimeStockLogo variant="dark" size="md" showTagline />
           </div>
@@ -181,7 +183,7 @@ export default function Login() {
             </button>
           )}
 
-          <h2 className="text-3xl font-bold text-primary mb-2 text-balance">{headingText}</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-primary mb-2 text-balance">{headingText}</h2>
           <p className="text-text-secondary mb-6">{subtitleText}</p>
 
           {authError && (
@@ -239,7 +241,7 @@ export default function Login() {
                   <div className="w-full border-t border-border" />
                 </div>
                 <div className="relative flex justify-center text-sm">
-                  <span className="px-3 bg-white text-text-muted">Or use your credentials</span>
+                  <span className="px-3 bg-[#FBFDFF] text-text-muted">Or use your credentials</span>
                 </div>
               </div>
             </>
@@ -342,7 +344,7 @@ export default function Login() {
             )}
 
             {mode === 'signin' && (
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4">
                 <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -394,7 +396,7 @@ export default function Login() {
                 onClick={() => switchMode('signup')}
                 className="font-bold text-accent hover:underline"
               >
-                Start 14-day free trial
+                Start {trialDaysCount}-day free trial
               </button>
             </p>
           )}

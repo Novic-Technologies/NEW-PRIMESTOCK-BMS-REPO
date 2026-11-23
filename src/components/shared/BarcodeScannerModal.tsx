@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Camera, X, Keyboard } from 'lucide-react';
+import { CameraViewfinderSkeleton } from './Skeletons';
 
 interface BarcodeScannerModalProps {
   isOpen: boolean;
@@ -98,9 +99,9 @@ export function BarcodeScannerModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4 no-print">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-        <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
+    <div className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-[70] flex items-center justify-center p-3 sm:p-4 no-print">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+        <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
           <div className="flex items-center gap-2.5">
             <Camera size={20} />
             <h3 className="text-lg font-bold text-white">{title}</h3>
@@ -115,15 +116,10 @@ export function BarcodeScannerModal({
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 overflow-y-auto flex-1">
           <div className="relative rounded-xl overflow-hidden bg-surface-alt border border-border min-h-[220px] flex items-center justify-center">
             <div id={regionId.current} className="w-full" />
-            {isStarting && !cameraError && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-alt/90 text-text-muted text-xs gap-2">
-                <div className="w-7 h-7 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                <span>Starting camera scanner...</span>
-              </div>
-            )}
+            {isStarting && !cameraError && <CameraViewfinderSkeleton />}
             {cameraError && (
               <div className="p-5 text-center space-y-1">
                 <Camera size={28} className="mx-auto text-text-muted opacity-50" />

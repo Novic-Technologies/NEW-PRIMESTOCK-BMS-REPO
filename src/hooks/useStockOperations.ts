@@ -7,6 +7,7 @@ import { useAuthStore } from '../store/authStore';
 import { StockAdjustment, StockTransfer } from '../types';
 import { applyBranchStockDelta, getEffectiveStock } from '../utils/branchStock';
 import { computeTrialState } from '../utils/trialUtils';
+import { canAccessFeature } from '../utils/planLimits';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { canManageInventoryData } from '../utils/rbac';
 import { logWorkspaceAudit } from './useAuditLog';
@@ -159,6 +160,10 @@ export function useStockOperations() {
     if (!tenant || !user) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!canAccessFeature(tenant, 'multiBranchTransfers')) {
+      toast.error('Inter-branch stock transfers require Business Growth or Enterprise plan.');
       return;
     }
     if (!canManageInventoryData(user)) {

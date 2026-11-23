@@ -9,6 +9,8 @@ import {
   Trash2,
   PackageCheck,
   Ban,
+  Sparkles,
+  FileCheck2,
 } from 'lucide-react';
 import { usePurchaseOrders } from '../../hooks/usePurchaseOrders';
 import { useSuppliers } from '../../hooks/useSuppliers';
@@ -17,22 +19,37 @@ import { useBranches } from '../../hooks/useBranches';
 import { useAuthStore } from '../../store/authStore';
 import { PurchaseOrder, PurchaseOrderItem } from '../../types';
 import { getEffectiveStock } from '../../utils/branchStock';
-import { fileToBase64, scanDocumentImage } from '../../services/aiService';
+import {
+  fileToBase64,
+  InvoiceCheckResult,
+  runAiAssistantTool,
+  scanDocumentImage,
+} from '../../services/aiService';
+import { canAccessFeature } from '../../utils/planLimits';
+import { SmartImportModal } from '../../components/shared/SmartImportModal';
+import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import { formatUGX, formatDate } from '../../utils/format';
 import { cn } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
 export default function PurchaseOrders() {
   const location = useLocation();
-  const { activeBranchId } = useAuthStore();
-  const { purchaseOrders, isLoading, createPurchaseOrder, receivePurchaseOrder, cancelPurchaseOrder } =
-    usePurchaseOrders();
+  const { activeBranchId, tenant } = useAuthStore();
+  const {
+    purchaseOrders,
+    isLoading,
+    createPurchaseOrder,
+    receivePurchaseOrder,
+    cancelPurchaseOrder,
+    bulkImportPurchaseOrders,
+  } = usePurchaseOrders();
   const { suppliers } = useSuppliers();
   const { products } = useInventory();
   const { branches } = useBranches();
 
   const [statusFilter, setStatusFilter] = useState<'all' | PurchaseOrder['status']>('all');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [receivingPO, setReceivingPO] = useState<PurchaseOrder | null>(null);
   const [paidNowInput, setPaidNowInput] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Cash');
@@ -46,7 +63,13 @@ export default function PurchaseOrders() {
   const [itemCost, setItemCost] = useState(0);
   const [isScanning, setIsScanning] = useState(false);
 
+  const [checkingPO, setCheckingPO] = useState<PurchaseOrder | null>(null);
+  const [invoicePasteText, setInvoicePasteText] = useState('');
+  const [invoiceCheckRes, setInvoiceCheckRes] = useState<InvoiceCheckResult | null>(null);
+  const [isCheckingInvoice, setIsCheckingInvoice] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const checkFileRef = useRef<HTMLInputElement>(null);
 
   // Support deep-link prefill from AI Smart Restock Forecast
   useEffect(() => {
@@ -213,6 +236,29 @@ export default function PurchaseOrders() {
     setPaidNowInput('');
   };
 
+  const handleRunPoInvoiceCheck = async (opts?: { base64?: string; mimeType?: string }) => {
+    if (!checkingPO) return;
+    if (!opts?.base64 && !invoicePasteText.trim()) {
+      toast.error('Paste invoice text or upload an invoice photo to compare');
+      return;
+    }
+    setIsCheckingInvoice(true);
+    try {
+      const res = await runAiAssistantTool<InvoiceCheckResult>('check_invoice', {
+        poReference: checkingPO.reference,
+        poItems: checkingPO.items,
+        invoiceText: invoicePasteText.trim(),
+        imageBase64: opts?.base64,
+        mimeType: opts?.mimeType,
+      });
+      setInvoiceCheckRes(res);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to check invoice against PO');
+    } finally {
+      setIsCheckingInvoice(false);
+    }
+  };
+
   const draftTotal = poItems.reduce((sum, i) => sum + i.total, 0);
 
   return (
@@ -224,14 +270,30 @@ export default function PurchaseOrders() {
             Order inventory from suppliers, scan invoices with AI, and receive stock live.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setIsCreateOpen(true)}
-          className="btn btn-primary gap-2 whitespace-nowrap self-start sm:self-auto"
-        >
-          <Plus size={18} />
-          New Purchase Order
-        </button>
+        <div className="flex flex-wrap gap-2.5 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => {
+              if (!canAccessFeature(tenant, 'suppliersAndPOs')) {
+                toast.error('Purchase Orders require Starter plan or higher. Upgrade in Billing.');
+                return;
+              }
+              setIsImportOpen(true);
+            }}
+            className="btn btn-secondary gap-2 whitespace-nowrap"
+          >
+            <Sparkles size={17} className="text-accent" />
+            Smart Import POs
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsCreateOpen(true)}
+            className="btn btn-primary gap-2 whitespace-nowrap"
+          >
+            <Plus size={18} />
+            New Purchase Order
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -272,7 +334,7 @@ export default function PurchaseOrders() {
 
       <div className="card p-0 overflow-hidden">
         <div className="p-4 border-b border-border flex flex-wrap items-center justify-between gap-3 bg-surface-alt/50">
-          <div className="flex items-center gap-1 p-1 bg-white border border-border rounded-lg">
+          <div className="flex items-center gap-1 p-1 bg-white border border-border rounded-lg max-w-full overflow-x-auto">
             {(['all', 'ordered', 'received', 'cancelled'] as const).map((status) => (
               <button
                 key={status}
@@ -291,7 +353,7 @@ export default function PurchaseOrders() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto hidden md:block">
           <table className="w-full text-left border-collapse min-w-[780px]">
             <thead>
               <tr className="bg-surface-alt/50 border-b border-border text-xs font-bold text-text-muted uppercase tracking-wider">
@@ -305,11 +367,7 @@ export default function PurchaseOrders() {
             </thead>
             <tbody className="divide-y divide-border text-sm">
               {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
-                    <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-                  </td>
-                </tr>
+                <TableRowsSkeleton rows={6} columns={6} />
               ) : filteredPOs.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-text-muted">
@@ -351,38 +409,150 @@ export default function PurchaseOrders() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      {po.status === 'ordered' ? (
-                        <div className="inline-flex items-center gap-2">
+                      <div className="inline-flex items-center gap-1.5">
+                        {po.status !== 'cancelled' && (
                           <button
                             type="button"
                             onClick={() => {
-                              setReceivingPO(po);
-                              setPaidNowInput(String(po.totalAmount - (po.paidAmount || 0)));
+                              setCheckingPO(po);
+                              setInvoicePasteText('');
+                              setInvoiceCheckRes(null);
                             }}
-                            className="btn btn-primary text-xs py-1.5 px-3 min-h-[34px] whitespace-nowrap"
+                            className="btn btn-secondary text-xs py-1.5 px-2.5 min-h-[34px] gap-1 whitespace-nowrap"
+                            title="Compare supplier invoice against PO"
                           >
-                            Receive Stock
+                            <FileCheck2 size={14} className="text-accent" />
+                            Check Invoice
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => cancelPurchaseOrder(po.id)}
-                            aria-label={`Cancel ${po.reference}`}
-                            className="p-2 text-text-muted hover:text-danger rounded-lg hover:bg-danger/10"
-                          >
-                            <Ban size={16} />
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-text-muted">
-                          {po.receivedAt ? `Received ${formatDate(po.receivedAt)}` : 'Closed'}
-                        </span>
-                      )}
+                        )}
+                        {po.status === 'ordered' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReceivingPO(po);
+                                setPaidNowInput(String(po.totalAmount - (po.paidAmount || 0)));
+                              }}
+                              className="btn btn-primary text-xs py-1.5 px-3 min-h-[34px] whitespace-nowrap"
+                            >
+                              Receive Stock
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => cancelPurchaseOrder(po.id)}
+                              aria-label={`Cancel ${po.reference}`}
+                              className="p-2 text-text-muted hover:text-danger rounded-lg hover:bg-danger/10"
+                            >
+                              <Ban size={16} />
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-xs text-text-muted">
+                            {po.receivedAt ? `Received ${formatDate(po.receivedAt)}` : 'Closed'}
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile List View */}
+        <div className="md:hidden divide-y divide-border">
+          {isLoading ? (
+            <MobileListSkeleton cards={5} />
+          ) : filteredPOs.length === 0 ? (
+            <div className="p-10 text-center text-text-muted text-sm">
+              No purchase orders found. Create your first supplier restock order.
+            </div>
+          ) : (
+            filteredPOs.map((po) => (
+              <div key={po.id} className="p-4 space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-primary font-mono truncate">{po.reference}</p>
+                    <p className="text-xs text-text-muted truncate">
+                      {formatDate(po.createdAt)}
+                      {po.branchId && branchNameMap[po.branchId]
+                        ? ` · ${branchNameMap[po.branchId]}`
+                        : ''}
+                    </p>
+                  </div>
+                  <span
+                    className={cn(
+                      'text-[11px] font-bold uppercase shrink-0',
+                      po.status === 'received'
+                        ? 'text-accent'
+                        : po.status === 'ordered'
+                        ? 'text-accent-alt'
+                        : 'text-danger'
+                    )}
+                  >
+                    {po.status}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-primary truncate">{po.supplierName}</p>
+                    <p className="text-xs text-text-secondary font-mono tabular-nums">
+                      {po.items.length} SKU(s) · {po.items.reduce((s, i) => s + i.quantity, 0)} units
+                    </p>
+                  </div>
+                  <p className="text-base font-bold text-primary font-mono tabular-nums shrink-0">
+                    {formatUGX(po.totalAmount)}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-border/60">
+                  {po.status !== 'cancelled' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCheckingPO(po);
+                        setInvoicePasteText('');
+                        setInvoiceCheckRes(null);
+                      }}
+                      className="btn btn-secondary text-xs py-1.5 px-2.5 min-h-[36px] gap-1 whitespace-nowrap"
+                    >
+                      <FileCheck2 size={14} className="text-accent" />
+                      Check Invoice
+                    </button>
+                  )}
+                  {po.status === 'ordered' ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReceivingPO(po);
+                          setPaidNowInput(String(po.totalAmount - (po.paidAmount || 0)));
+                        }}
+                        className="btn btn-primary text-xs py-1.5 px-3 min-h-[36px] whitespace-nowrap"
+                      >
+                        Receive Stock
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => cancelPurchaseOrder(po.id)}
+                        aria-label={`Cancel ${po.reference}`}
+                        className="btn btn-secondary text-xs py-1.5 px-2.5 min-h-[36px] text-danger hover:bg-danger/10"
+                      >
+                        <Ban size={14} />
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-xs text-text-muted">
+                      {po.receivedAt ? `Received ${formatDate(po.receivedAt)}` : 'Closed'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
@@ -572,18 +742,18 @@ export default function PurchaseOrders() {
       {/* Receive Purchase Order Modal */}
       {receivingPO && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
-              <h3 className="text-lg font-bold text-white">Receive {receivingPO.reference}</h3>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
+              <h3 className="text-lg font-bold text-white truncate pr-2">Receive {receivingPO.reference}</h3>
               <button
                 type="button"
                 onClick={() => setReceivingPO(null)}
-                className="p-1 hover:bg-white/10 rounded-lg"
+                className="p-1 hover:bg-white/10 rounded-lg shrink-0"
               >
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleConfirmReceive} className="p-6 space-y-4">
+            <form onSubmit={handleConfirmReceive} className="p-6 space-y-4 overflow-y-auto flex-1">
               <p className="text-sm text-text-secondary">
                 Confirming receipt adds{' '}
                 <strong>{receivingPO.items.reduce((s, i) => s + i.quantity, 0)} units</strong> across{' '}
@@ -641,6 +811,140 @@ export default function PurchaseOrders() {
           </div>
         </div>
       )}
+
+      {/* AI Invoice vs PO Discrepancy Check Modal */}
+      {checkingPO && (
+        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
+              <div>
+                <h3 className="text-lg font-bold text-white">Check Supplier Invoice</h3>
+                <p className="text-xs text-white/75">
+                  {checkingPO.reference} · {checkingPO.supplierName} ({formatUGX(checkingPO.totalAmount)})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCheckingPO(null)}
+                className="p-1 hover:bg-white/10 rounded-lg"
+                aria-label="Close invoice checker"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4 overflow-y-auto text-sm">
+              <p className="text-xs text-text-secondary">
+                Paste invoice line items or upload a supplier invoice photo to spot overcharges, missing units, or unexpected items before settling.
+              </p>
+              <textarea
+                rows={4}
+                className="input w-full text-xs"
+                placeholder="Paste supplier invoice lines, quantities, and unit prices..."
+                value={invoicePasteText}
+                onChange={(e) => setInvoicePasteText(e.target.value)}
+              />
+              <div className="flex flex-wrap gap-2">
+                <input
+                  ref={checkFileRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const data = await fileToBase64(file);
+                    void handleRunPoInvoiceCheck(data);
+                    if (checkFileRef.current) checkFileRef.current.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={isCheckingInvoice || !invoicePasteText.trim()}
+                  onClick={() => handleRunPoInvoiceCheck()}
+                  className="btn btn-primary text-xs whitespace-nowrap"
+                >
+                  {isCheckingInvoice ? 'Checking...' : 'Compare Pasted Invoice'}
+                </button>
+                <button
+                  type="button"
+                  disabled={isCheckingInvoice}
+                  onClick={() => checkFileRef.current?.click()}
+                  className="btn btn-secondary text-xs gap-1.5 whitespace-nowrap"
+                >
+                  <Camera size={14} />
+                  Upload Invoice Photo
+                </button>
+              </div>
+
+              {invoiceCheckRes && (() => {
+                const discrepancies = invoiceCheckRes.discrepancies || [];
+                const flaggedCount = discrepancies.filter((d) => d.status !== 'matched').length;
+                const totalVarianceUgx = discrepancies.reduce(
+                  (sum, d) =>
+                    sum +
+                    ((Number(d.invoiceQty) || 0) * (Number(d.invoiceUnitCostUgx) || 0) -
+                      (Number(d.poQty) || 0) * (Number(d.poUnitCostUgx) || 0)),
+                  0
+                );
+                return (
+                  <div className="p-4 rounded-xl bg-surface-alt border border-border space-y-2 text-xs">
+                    <div className="flex justify-between font-bold text-primary">
+                      <span>
+                        Status: {flaggedCount === 0 ? 'MATCHED' : `${flaggedCount} ISSUE(S) FLAGGED`}
+                      </span>
+                      <span className="font-mono tabular-nums">
+                        Variance: {totalVarianceUgx > 0 ? '+' : ''}
+                        {formatUGX(totalVarianceUgx)}
+                      </span>
+                    </div>
+                    <p className="text-text-secondary">{invoiceCheckRes.summary}</p>
+                    {discrepancies.map((d, idx) => (
+                      <div
+                        key={idx}
+                        className={cn(
+                          'pt-1.5 border-t border-border/60',
+                          d.status === 'matched' ? 'text-accent' : 'text-danger'
+                        )}
+                      >
+                        <strong>{d.itemName}</strong> ({d.status.replace(/_/g, ' ')}): {d.reason}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <SmartImportModal
+        isOpen={isImportOpen}
+        entityType="purchases"
+        onClose={() => setIsImportOpen(false)}
+        onCommit={(rows, options) =>
+          bulkImportPurchaseOrders(
+            rows.map((r) => ({
+              reference: r.reference ? String(r.reference) : undefined,
+              supplierName: String(r.supplierName || ''),
+              supplierPhone: r.supplierPhone ? String(r.supplierPhone) : undefined,
+              itemName: String(r.itemName || ''),
+              sku: r.sku ? String(r.sku) : undefined,
+              quantity: Number(r.quantity) || 1,
+              unitCost: Number(r.unitCost) || 0,
+              totalAmount: Number(r.totalAmount) || 0,
+              paidAmount: Number(r.paidAmount) || 0,
+              status:
+                r.status === 'received' || r.status === 'cancelled' || r.status === 'ordered'
+                  ? r.status
+                  : undefined,
+              expectedDate: r.expectedDate ? String(r.expectedDate) : undefined,
+              notes: r.notes ? String(r.notes) : undefined,
+              items: Array.isArray(r.items) ? r.items : undefined,
+            })),
+            { markReceived: options.markReceived }
+          )
+        }
+      />
     </div>
   );
 }

@@ -21,7 +21,11 @@ import {
   MessageCircle,
   Sparkles,
   Split,
+  KeyRound,
+  Mic,
+  AlertTriangle,
 } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
 import { useInventory } from '../../hooks/useInventory';
 import { usePOS } from '../../hooks/usePOS';
 import { useCustomers } from '../../hooks/useCustomers';
@@ -29,28 +33,40 @@ import { useShifts } from '../../hooks/useShifts';
 import { useBranches } from '../../hooks/useBranches';
 import { useExpenses } from '../../hooks/useExpenses';
 import { useSuppliers } from '../../hooks/useSuppliers';
+import { useTeam } from '../../hooks/useTeam';
+import { logWorkspaceAudit } from '../../hooks/useAuditLog';
 import { useAuthStore } from '../../store/authStore';
+import { useCreditPayments } from '../../hooks/useCreditPayments';
 import { formatUGX } from '../../utils/format';
 import { getEffectiveStock } from '../../utils/branchStock';
 import { buildSaleWhatsAppUrl, buildDebtWhatsAppUrl } from '../../utils/whatsapp';
 import { canAccessFeature } from '../../utils/planLimits';
+import { hashStaffPin, isValidPinFormat, ROLE_META } from '../../utils/rbac';
 import { printViaThermalSerial } from '../../utils/thermalPrint';
-import { fetchEodOwnerDigest } from '../../services/aiService';
+import { PosProductGridSkeleton } from '../../components/shared/Skeletons';
+import {
+  fetchEodOwnerDigest,
+  ParsedOrderDraftResult,
+  runAiAssistantTool,
+} from '../../services/aiService';
+import { computeCartUpsellSuggestions } from '../../utils/aiAnalytics';
 import { BarcodeScannerModal } from '../../components/shared/BarcodeScannerModal';
 import {
   CheckoutCompletionPayload,
   UgandaCheckoutModal,
 } from '../../components/checkout/UgandaCheckoutModal';
 import { cn } from '../../lib/utils';
-import { EodDigestResult, Sale } from '../../types';
+import { BusinessRole, EodDigestResult, Sale } from '../../types';
 import toast from 'react-hot-toast';
 
 export default function POS() {
+  const location = useLocation();
   const { tenant, user } = useAuthStore();
   const { products, isLoading } = useInventory();
   const { customers } = useCustomers();
   const { suppliers } = useSuppliers();
   const { expenses } = useExpenses();
+  const { members } = useTeam();
   const { activeBranchId, activeBranch } = useBranches();
   const { activeShift, openShift, recordSaleOnShift, closeShift } = useShifts();
   const {
@@ -72,14 +88,19 @@ export default function POS() {
     setCustomerId,
     selectedCustomerType,
     processSale,
+    applyOrderDraft,
     sales,
     clearCart,
   } = usePOS();
+  useCreditPayments();
 
   const effectiveBranchId =
     activeBranchId && activeBranchId !== 'ALL' ? activeBranchId : user?.branchId || null;
 
   const [search, setSearch] = useState('');
+  const [quickOrderInput, setQuickOrderInput] = useState('');
+  const [quickOrderDraft, setQuickOrderDraft] = useState<ParsedOrderDraftResult | null>(null);
+  const [isParsingOrder, setIsParsingOrder] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
@@ -99,6 +120,44 @@ export default function POS() {
   const [isShiftSubmitting, setIsShiftSubmitting] = useState(false);
   const [eodDigest, setEodDigest] = useState<EodDigestResult | null>(null);
   const [isGeneratingDigest, setIsGeneratingDigest] = useState(false);
+
+  React.useEffect(() => {
+    const state = location.state as { aiOrderDraft?: ParsedOrderDraftResult } | null;
+    if (state?.aiOrderDraft) {
+      setQuickOrderDraft(state.aiOrderDraft);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
+
+  // Cashier Quick-Switch PIN state
+  const staffPinsEnabled = Boolean(tenant?.preferences?.staffPinsEnabled);
+  const [activeCashier, setActiveCashier] = useState<{
+    uid: string;
+    name: string;
+    role: BusinessRole;
+  } | null>(null);
+  const [showSwitchCashierModal, setShowSwitchCashierModal] = useState(false);
+  const [switchTargetUid, setSwitchTargetUid] = useState('');
+  const [switchPinInput, setSwitchPinInput] = useState('');
+  const [switchPinError, setSwitchPinError] = useState<string | null>(null);
+  const [isVerifyingPin, setIsVerifyingPin] = useState(false);
+
+  React.useEffect(() => {
+    if (!user) {
+      setActiveCashier(null);
+      return;
+    }
+    setActiveCashier((prev) =>
+      prev && prev.uid === user.uid ? prev : { uid: user.uid, name: user.name, role: user.role }
+    );
+  }, [user?.uid, user?.name, user?.role]);
+
+  const pinEnabledMembers = useMemo(
+    () => members.filter((m) => m.status === 'active' && Boolean(m.posPinHash)),
+    [members]
+  );
+
+  const currentOperator = activeCashier || (user ? { uid: user.uid, name: user.name, role: user.role } : null);
 
   const categories = useMemo(() => {
     const cats = new Set(products.map((p) => p.category || 'Uncategorized'));
@@ -135,6 +194,95 @@ export default function POS() {
     [customers, customerSearch]
   );
 
+  const cartUpsells = useMemo(
+    () =>
+      computeCartUpsellSuggestions({
+        cartProductIds: cart.map((c) => c.id),
+        products,
+        sales,
+        branchId: effectiveBranchId,
+        limit: 3,
+      }),
+    [cart, products, sales, effectiveBranchId]
+  );
+
+  const cartCostTotal = useMemo(
+    () => cart.reduce((sum, item) => sum + (Number(item.buyingPrice) || 0) * item.quantity, 0),
+    [cart]
+  );
+
+  const cartMarginCheck = useMemo(() => {
+    const netRevenue = Math.max(0, subtotal - discount);
+    if (cart.length === 0 || netRevenue <= 0 || cartCostTotal <= 0) {
+      return { warn: false, marginPct: 100, profitUgx: 0 };
+    }
+    const profitUgx = netRevenue - cartCostTotal;
+    const marginPct = (profitUgx / netRevenue) * 100;
+    return { warn: marginPct <= 5, marginPct: Number(marginPct.toFixed(1)), profitUgx };
+  }, [cart.length, subtotal, discount, cartCostTotal]);
+
+  const handleParseQuickOrder = async () => {
+    if (!quickOrderInput.trim() || isParsingOrder) return;
+    setIsParsingOrder(true);
+    try {
+      const draft = await runAiAssistantTool<ParsedOrderDraftResult>('parse_order', {
+        text: quickOrderInput.trim(),
+        products: products.slice(0, 60).map((p) => ({
+          id: p.id,
+          name: p.name,
+          unit: p.unit,
+          sellingPrice: p.sellingPrice,
+        })),
+        customers: customers.slice(0, 40).map((c) => ({
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+        })),
+      });
+      setQuickOrderDraft(draft);
+      if (!draft.items || draft.items.length === 0) {
+        toast('No matching products found in that order phrase.');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not parse order');
+    } finally {
+      setIsParsingOrder(false);
+    }
+  };
+
+  const handleLoadQuickDraftToCart = async () => {
+    if (!quickOrderDraft) return;
+    const prodMap = new Map(products.map((p) => [p.id, p]));
+    const items = (quickOrderDraft.items || [])
+      .map((m) => ({
+        product: prodMap.get(m.productId),
+        quantity: m.quantity,
+      }))
+      .filter((x): x is { product: NonNullable<typeof x.product>; quantity: number } => Boolean(x.product));
+    const ok = await applyOrderDraft(items, quickOrderDraft.matchedCustomerId || undefined);
+    if (ok) {
+      setQuickOrderDraft(null);
+      setQuickOrderInput('');
+    }
+  };
+
+  const handleDictateOrder = () => {
+    const SpeechRec =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) {
+      toast('Voice dictation is not supported in this browser; type the order instead.');
+      return;
+    }
+    const rec = new SpeechRec();
+    rec.lang = 'en-UG';
+    rec.interimResults = false;
+    rec.onresult = (ev: any) => {
+      const text = ev?.results?.[0]?.[0]?.transcript || '';
+      if (text) setQuickOrderInput(text);
+    };
+    rec.start();
+  };
+
   const handleBarcodeDetected = (code: string) => {
     const q = code.trim().toLowerCase();
     const matched = products.find(
@@ -163,6 +311,8 @@ export default function POS() {
         payerPhone: payload.payerPhone,
         cashTendered: payload.cashTendered,
         changeGiven: payload.changeGiven,
+        cashierId: currentOperator?.uid,
+        cashierName: currentOperator?.name,
       });
       if (sale) {
         if (activeShift && sale.status === 'completed') {
@@ -175,6 +325,63 @@ export default function POS() {
       }
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleSwitchCashier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tenant || !user || isVerifyingPin) return;
+    const pin = switchPinInput.trim();
+    if (!isValidPinFormat(pin)) {
+      setSwitchPinError('Enter a 4-digit numeric PIN.');
+      return;
+    }
+    setSwitchPinError(null);
+    setIsVerifyingPin(true);
+    try {
+      const candidates = switchTargetUid
+        ? pinEnabledMembers.filter((m) => m.uid === switchTargetUid)
+        : pinEnabledMembers;
+
+      let matched = null;
+      for (const candidate of candidates) {
+        const candidateHash = await hashStaffPin(tenant.id, candidate.uid, pin);
+        if (candidateHash === candidate.posPinHash) {
+          matched = candidate;
+          break;
+        }
+      }
+
+      if (!matched) {
+        setSwitchPinError('Incorrect 4-digit PIN. Please check and try again.');
+        return;
+      }
+
+      const prevName = currentOperator?.name || user.name;
+      setActiveCashier({
+        uid: matched.uid,
+        name: matched.name,
+        role: matched.role,
+      });
+      setShowSwitchCashierModal(false);
+      setSwitchPinInput('');
+      setSwitchTargetUid('');
+
+      void logWorkspaceAudit({
+        tenantId: tenant.id,
+        branchId: effectiveBranchId || undefined,
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        action: 'POS_CASHIER_SWITCHED',
+        entityType: 'pos',
+        entityId: matched.uid,
+        summary: `Quick-switched POS operator from ${prevName} to ${matched.name} (${ROLE_META[matched.role]?.label || matched.role})`,
+      });
+
+      toast.success(`Active cashier: ${matched.name}`);
+    } finally {
+      setIsVerifyingPin(false);
     }
   };
 
@@ -276,14 +483,14 @@ export default function POS() {
   const cartItemCount = cart.reduce((acc, item) => acc + item.quantity, 0);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)] lg:h-[calc(100vh-160px)] overflow-hidden pb-16 lg:pb-0">
+    <div className="flex flex-col h-[calc(100dvh-96px)] md:h-[calc(100dvh-160px)] min-h-[500px] overflow-hidden">
       {/* Mobile Tabs */}
-      <div className="lg:hidden flex border-b border-border bg-white sticky top-0 z-10 no-print">
+      <div className="md:hidden flex border-b border-border bg-white sticky top-0 z-10 shrink-0 no-print -mx-4 px-4 mb-3">
         <button
           type="button"
           onClick={() => setActiveTab('products')}
           className={cn(
-            'flex-1 py-4 font-bold text-sm transition-colors relative',
+            'flex-1 py-3.5 font-bold text-sm transition-colors relative',
             activeTab === 'products' ? 'text-accent' : 'text-text-muted'
           )}
         >
@@ -294,7 +501,7 @@ export default function POS() {
           type="button"
           onClick={() => setActiveTab('cart')}
           className={cn(
-            'flex-1 py-4 font-bold text-sm transition-colors relative flex items-center justify-center gap-2',
+            'flex-1 py-3.5 font-bold text-sm transition-colors relative flex items-center justify-center gap-2',
             activeTab === 'cart' ? 'text-accent' : 'text-text-muted'
           )}
         >
@@ -308,12 +515,12 @@ export default function POS() {
         </button>
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-6 h-full overflow-hidden p-4 lg:p-0 no-print">
+      <div className="flex flex-col md:flex-row gap-4 lg:gap-6 flex-1 min-h-0 overflow-hidden no-print">
         {/* Product Grid Section */}
         <div
           className={cn(
-            'flex-1 flex flex-col gap-4 min-h-0',
-            activeTab !== 'products' && 'hidden lg:flex'
+            'flex-1 flex flex-col gap-3 sm:gap-4 min-h-0 min-w-0',
+            activeTab !== 'products' && 'hidden md:flex'
           )}
         >
           {/* Shift Cash Drawer + Held Carts + Search and Customer */}
@@ -327,7 +534,10 @@ export default function POS() {
                       Shift Open
                     </span>
                     <span className="text-text-secondary">
-                      Cashier: <strong className="text-primary">{activeShift.userName}</strong>
+                      Operator:{' '}
+                      <strong className="text-primary">
+                        {currentOperator?.name || activeShift.userName}
+                      </strong>
                     </span>
                     <span className="text-text-secondary">
                       Expected Drawer:{' '}
@@ -339,36 +549,77 @@ export default function POS() {
                       ({activeShift.salesCount} sales)
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setClosingCashInput(String(activeShift.expectedCash));
-                      setEodDigest(null);
-                      setShowCloseShiftModal(true);
-                    }}
-                    className="btn btn-secondary py-1.5 px-3 text-xs gap-1.5 whitespace-nowrap"
-                  >
-                    <Calculator size={14} />
-                    Close Shift
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {staffPinsEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSwitchPinInput('');
+                          setSwitchTargetUid('');
+                          setSwitchPinError(null);
+                          setShowSwitchCashierModal(true);
+                        }}
+                        className="btn btn-secondary py-1.5 px-3 text-xs gap-1.5 whitespace-nowrap"
+                      >
+                        <KeyRound size={14} className="text-accent" />
+                        Switch Cashier
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setClosingCashInput(String(activeShift.expectedCash));
+                        setEodDigest(null);
+                        setShowCloseShiftModal(true);
+                      }}
+                      className="btn btn-secondary py-1.5 px-3 text-xs gap-1.5 whitespace-nowrap"
+                    >
+                      <Calculator size={14} />
+                      Close Shift
+                    </button>
+                  </div>
                 </>
               ) : (
                 <>
-                  <div className="flex items-center gap-2 text-xs text-text-muted">
-                    <Clock size={14} />
-                    <span>No active cash drawer shift open. Open a shift to track float &amp; variance.</span>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-text-muted">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Clock size={14} />
+                      <span>
+                        No active cash drawer shift open.
+                        {staffPinsEnabled && currentOperator
+                          ? ` Active operator: ${currentOperator.name}.`
+                          : ' Open a shift to track float & variance.'}
+                      </span>
+                    </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpeningFloatInput('0');
-                      setShowOpenShiftModal(true);
-                    }}
-                    className="btn btn-primary py-1.5 px-3 text-xs gap-1.5 whitespace-nowrap"
-                  >
-                    <Clock size={14} />
-                    Open Shift
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {staffPinsEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSwitchPinInput('');
+                          setSwitchTargetUid('');
+                          setSwitchPinError(null);
+                          setShowSwitchCashierModal(true);
+                        }}
+                        className="btn btn-secondary py-1.5 px-3 text-xs gap-1.5 whitespace-nowrap"
+                      >
+                        <KeyRound size={14} className="text-accent" />
+                        Switch Cashier
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpeningFloatInput('0');
+                        setShowOpenShiftModal(true);
+                      }}
+                      className="btn btn-primary py-1.5 px-3 text-xs gap-1.5 whitespace-nowrap"
+                    >
+                      <Clock size={14} />
+                      Open Shift
+                    </button>
+                  </div>
                 </>
               )}
             </div>
@@ -447,6 +698,79 @@ export default function POS() {
               </button>
             </div>
 
+            {/* AI Quick Order Bar (Type or Speak -> Preview -> Load Cart) */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 bg-white border border-border rounded-xl px-3 py-1.5">
+                <Sparkles size={15} className="text-accent shrink-0" />
+                <input
+                  type="text"
+                  placeholder="AI Quick Order: e.g. '3 sugar and 2 cooking oil for Sarah'..."
+                  className="flex-1 text-xs bg-transparent outline-none text-primary placeholder:text-text-muted py-1"
+                  value={quickOrderInput}
+                  onChange={(e) => setQuickOrderInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void handleParseQuickOrder();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={handleDictateOrder}
+                  title="Dictate order by voice"
+                  aria-label="Dictate order by voice"
+                  className="p-1.5 text-text-muted hover:text-primary rounded-lg"
+                >
+                  <Mic size={15} />
+                </button>
+                <button
+                  type="button"
+                  disabled={isParsingOrder || !quickOrderInput.trim()}
+                  onClick={handleParseQuickOrder}
+                  className="text-xs font-bold text-accent hover:underline whitespace-nowrap shrink-0 disabled:opacity-40"
+                >
+                  {isParsingOrder ? 'Parsing...' : 'Draft Cart'}
+                </button>
+              </div>
+
+              {quickOrderDraft && (
+                <div className="p-3 bg-white border border-accent/40 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-bold text-primary">
+                      Draft ({quickOrderDraft.matchedCustomerName || 'Walk-in'}):{' '}
+                      {(quickOrderDraft.items || [])
+                        .map((i) => `${i.quantity}× ${i.productName}`)
+                        .join(', ') || 'No matches'}
+                    </p>
+                    {quickOrderDraft.reason && (
+                      <p className="text-[11px] text-text-secondary">
+                        {quickOrderDraft.reason}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setQuickOrderDraft(null)}
+                      className="px-2 py-1 text-text-muted hover:text-primary"
+                    >
+                      Dismiss
+                    </button>
+                    {(quickOrderDraft.items || []).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleLoadQuickDraftToCart}
+                        className="btn btn-primary py-1 px-3 text-xs whitespace-nowrap"
+                      >
+                        Load into Cart
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Category Filter */}
             <div className="flex overflow-x-auto pb-2 gap-2 no-scrollbar">
               {categories.map((cat) => (
@@ -468,11 +792,9 @@ export default function POS() {
           </div>
 
           {/* Products Scrollable Area */}
-          <div className="flex-1 overflow-y-auto pr-1">
+          <div className={cn('flex-1 overflow-y-auto pr-1', cartItemCount > 0 ? 'pb-20 md:pb-2' : 'pb-2')}>
             {isLoading ? (
-              <div className="h-full flex items-center justify-center py-20">
-                <div className="w-10 h-10 border-4 border-accent border-t-transparent rounded-full animate-spin" />
-              </div>
+              <PosProductGridSkeleton count={8} />
             ) : filteredProducts.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-text-muted py-20">
                 <Package size={48} className="mb-4 opacity-40" />
@@ -537,8 +859,8 @@ export default function POS() {
         {/* Cart / Checkout Section */}
         <div
           className={cn(
-            'w-full lg:w-[380px] xl:w-[420px] flex flex-col min-h-0',
-            activeTab !== 'cart' && 'hidden lg:flex'
+            'w-full md:w-[320px] lg:w-[380px] xl:w-[420px] shrink-0 flex flex-col min-h-0',
+            activeTab !== 'cart' && 'hidden md:flex'
           )}
         >
           <div className="card flex-1 flex flex-col p-0 overflow-hidden border-accent/20">
@@ -583,14 +905,14 @@ export default function POS() {
                         )}
                       </p>
                     </div>
-                    <div className="flex items-center gap-1 bg-surface-alt rounded-lg p-0.5">
+                    <div className="flex items-center gap-1 bg-surface-alt rounded-lg p-0.5 shrink-0">
                       <button
                         type="button"
                         aria-label={`Decrease ${item.name} quantity`}
                         onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                        className="w-7 h-7 flex items-center justify-center hover:bg-white rounded transition-colors text-text-muted hover:text-primary"
+                        className="w-9 h-9 md:w-8 md:h-8 flex items-center justify-center hover:bg-white rounded transition-colors text-text-muted hover:text-primary"
                       >
-                        <Minus size={14} />
+                        <Minus size={15} />
                       </button>
                       <span className="text-sm font-bold w-6 text-center text-primary tabular-nums">
                         {item.quantity}
@@ -599,25 +921,62 @@ export default function POS() {
                         type="button"
                         aria-label={`Increase ${item.name} quantity`}
                         onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                        className="w-7 h-7 flex items-center justify-center hover:bg-white rounded transition-colors text-text-muted hover:text-primary"
+                        className="w-9 h-9 md:w-8 md:h-8 flex items-center justify-center hover:bg-white rounded transition-colors text-text-muted hover:text-primary"
                       >
-                        <Plus size={14} />
+                        <Plus size={15} />
                       </button>
                     </div>
                     <button
                       type="button"
                       aria-label={`Remove ${item.name}`}
                       onClick={() => removeFromCart(item.id)}
-                      className="p-2 text-text-muted hover:text-danger transition-colors"
+                      className="p-2.5 min-w-[40px] min-h-[40px] flex items-center justify-center text-text-muted hover:text-danger transition-colors shrink-0"
                     >
                       <Trash2 size={16} />
                     </button>
                   </div>
                 ))
               )}
+
+              {cart.length > 0 && cartUpsells.length > 0 && (
+                <div className="pt-3 border-t border-border space-y-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                    Frequently Bought Together
+                  </p>
+                  <div className="space-y-1.5">
+                    {cartUpsells.map((u) => (
+                      <div
+                        key={u.product.id}
+                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-surface-alt border border-border/70 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-semibold text-primary truncate">{u.product.name}</p>
+                          <p className="text-[11px] text-text-muted truncate">{u.reason}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => addToCart(u.product)}
+                          className="btn btn-secondary py-1 px-2.5 text-[11px] font-bold whitespace-nowrap shrink-0"
+                        >
+                          + {formatUGX(u.product.sellingPrice)}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="p-5 bg-surface-alt border-t border-border space-y-3 shrink-0">
+              {cartMarginCheck.warn && (
+                <div className="p-2.5 rounded-lg bg-danger/10 border border-danger/30 text-danger text-xs flex items-center gap-2">
+                  <AlertTriangle size={14} className="shrink-0" />
+                  <span>
+                    Low/negative margin warning: {cartMarginCheck.marginPct}% gross margin (
+                    {formatUGX(cartMarginCheck.profitUgx)}) after discount.
+                  </span>
+                </div>
+              )}
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-text-secondary">Subtotal</span>
@@ -697,7 +1056,7 @@ export default function POS() {
 
       {/* Mobile Sticky Summary Bar */}
       {activeTab === 'products' && cartItemCount > 0 && (
-        <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-primary text-white px-4 py-3 flex items-center justify-between shadow-2xl z-30 no-print">
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-primary text-white px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex items-center justify-between shadow-2xl z-30 no-print">
           <div className="flex flex-col">
             <span className="text-[10px] uppercase font-bold text-white/60 tracking-widest">
               Total Amount
@@ -727,8 +1086,8 @@ export default function POS() {
       {/* Select Customer Modal */}
       {showCustomerModal && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white">Select Customer</h3>
               <button
                 type="button"
@@ -738,7 +1097,7 @@ export default function POS() {
                 <X size={20} />
               </button>
             </div>
-            <div className="p-4 space-y-3">
+            <div className="p-4 space-y-3 overflow-y-auto flex-1">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" size={16} />
                 <input
@@ -803,8 +1162,8 @@ export default function POS() {
       {/* Custom Discount Modal */}
       {showDiscountModal && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
-          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
+          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white">Apply Discount</h3>
               <button
                 type="button"
@@ -814,7 +1173,7 @@ export default function POS() {
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleApplyDiscount} className="p-5 space-y-4">
+            <form onSubmit={handleApplyDiscount} className="p-5 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-sm font-bold text-primary mb-1.5">
                   Discount Amount (UGX)
@@ -830,8 +1189,13 @@ export default function POS() {
                   autoFocus
                 />
                 <p className="text-xs text-text-muted mt-1 font-mono tabular-nums">
-                  Max subtotal: {formatUGX(subtotal)}
+                  Max subtotal: {formatUGX(subtotal)} · Cost floor: {formatUGX(cartCostTotal)}
                 </p>
+                {subtotal - (Number(discountInput) || 0) < cartCostTotal && cartCostTotal > 0 && (
+                  <p className="text-xs font-semibold text-danger mt-1">
+                    Warning: this discount drops total below cost price ({formatUGX(cartCostTotal)}).
+                  </p>
+                )}
               </div>
               <div className="flex gap-3">
                 <button
@@ -868,8 +1232,8 @@ export default function POS() {
       {/* Sale Completed / Print / WhatsApp Receipt Modal */}
       {completedSale && tenant && (
         <div className="fixed inset-0 bg-primary/60 backdrop-blur-md z-[60] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white no-print">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0 no-print">
               <div className="flex items-center gap-2">
                 <Receipt size={20} />
                 <h3 className="text-lg font-bold text-white">Sale Receipt</h3>
@@ -883,7 +1247,7 @@ export default function POS() {
               </button>
             </div>
 
-            <div className="p-6 space-y-4 print-content">
+            <div className="p-6 space-y-4 print-content overflow-y-auto flex-1">
               <div className="text-center border-b border-border pb-4">
                 {tenant.logo && (
                   <img
@@ -905,6 +1269,9 @@ export default function POS() {
                 )}
                 {completedSale.branchName && (
                   <p className="text-xs text-text-muted">Branch: {completedSale.branchName}</p>
+                )}
+                {completedSale.cashierName && (
+                  <p className="text-xs text-text-muted">Cashier: {completedSale.cashierName}</p>
                 )}
                 <p className="text-xs text-text-muted mt-1">
                   Ref: {completedSale.reference} · {new Date(completedSale.createdAt).toLocaleString()}
@@ -976,7 +1343,7 @@ export default function POS() {
               </div>
             </div>
 
-            <div className="p-4 bg-surface-alt border-t border-border flex flex-wrap gap-2 no-print">
+            <div className="p-4 bg-surface-alt border-t border-border flex flex-wrap gap-2 shrink-0 no-print">
               <button
                 type="button"
                 onClick={() => setCompletedSale(null)}
@@ -1012,8 +1379,8 @@ export default function POS() {
       {/* Open Shift Modal */}
       {showOpenShiftModal && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
-          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
+          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white">Open Cash Drawer Shift</h3>
               <button
                 type="button"
@@ -1023,7 +1390,7 @@ export default function POS() {
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleOpenShift} className="p-5 space-y-4">
+            <form onSubmit={handleOpenShift} className="p-5 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-sm font-bold text-primary mb-1.5">
                   Opening Cash Float (UGX)
@@ -1209,6 +1576,115 @@ export default function POS() {
                 <button type="submit" disabled={isShiftSubmitting} className="btn btn-primary flex-1">
                   {isShiftSubmitting ? 'Closing...' : 'Confirm & Close Shift'}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Quick-Switch Cashier 4-Digit PIN Modal */}
+      {showSwitchCashierModal && (
+        <div className="fixed inset-0 bg-primary/55 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
+          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
+              <div className="flex items-center gap-2">
+                <KeyRound size={18} />
+                <div>
+                  <h3 className="text-base font-bold text-white">Switch Counter Cashier</h3>
+                  <p className="text-[11px] text-white/75">
+                    Current: {currentOperator?.name || user?.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSwitchCashierModal(false)}
+                className="p-1 hover:bg-white/10 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSwitchCashier} className="p-5 space-y-4 overflow-y-auto">
+              {pinEnabledMembers.length === 0 ? (
+                <div className="p-3.5 rounded-xl bg-surface-alt border border-border text-xs text-text-secondary space-y-2">
+                  <p className="font-bold text-primary">No 4-digit staff PINs configured yet.</p>
+                  <p>
+                    Go to Team &amp; Branches and assign a 4-digit POS PIN to each cashier so they can swap shifts instantly.
+                  </p>
+                  <Link
+                    to="/team"
+                    onClick={() => setShowSwitchCashierModal(false)}
+                    className="inline-block font-bold text-accent hover:underline"
+                  >
+                    Open Team &amp; Branches &rarr;
+                  </Link>
+                </div>
+              ) : (
+                <>
+                  {switchPinError && (
+                    <div className="p-2.5 rounded-lg bg-danger/10 border border-danger/25 text-danger text-xs font-medium">
+                      {switchPinError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-primary mb-1">
+                      Operator (Optional — or enter PIN directly)
+                    </label>
+                    <select
+                      className="input w-full text-sm"
+                      value={switchTargetUid}
+                      onChange={(e) => setSwitchTargetUid(e.target.value)}
+                    >
+                      <option value="">Auto-detect by 4-digit PIN</option>
+                      {pinEnabledMembers.map((m) => (
+                        <option key={m.uid} value={m.uid}>
+                          {m.name} ({ROLE_META[m.role]?.label || m.role})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-primary mb-1">
+                      4-Digit Counter PIN *
+                    </label>
+                    <input
+                      required
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={4}
+                      pattern="\d{4}"
+                      placeholder="••••"
+                      className="input w-full font-mono text-center text-2xl tracking-[0.55em]"
+                      value={switchPinInput}
+                      onChange={(e) => {
+                        setSwitchPinError(null);
+                        setSwitchPinInput(e.target.value.replace(/\D/g, '').slice(0, 4));
+                      }}
+                      autoFocus
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowSwitchCashierModal(false)}
+                  className="btn btn-secondary flex-1"
+                >
+                  Cancel
+                </button>
+                {pinEnabledMembers.length > 0 && (
+                  <button
+                    type="submit"
+                    disabled={isVerifyingPin || switchPinInput.length !== 4}
+                    className="btn btn-primary flex-1"
+                  >
+                    {isVerifyingPin ? 'Verifying...' : 'Unlock Cashier'}
+                  </button>
+                )}
               </div>
             </form>
           </div>

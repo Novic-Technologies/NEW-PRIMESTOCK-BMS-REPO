@@ -29,7 +29,13 @@ import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
 import { getEffectivePlanQuota, isQuotaExceeded } from '../utils/planLimits';
-import { getDefaultSectionsForRole, hashEmailForRegistry, ROLE_META } from '../utils/rbac';
+import {
+  getDefaultSectionsForRole,
+  hashEmailForRegistry,
+  hashStaffPin,
+  isValidPinFormat,
+  ROLE_META,
+} from '../utils/rbac';
 import { buildSubscriptionEmailHtml, sendTransactionalEmail } from '../services/notificationService';
 import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
@@ -294,6 +300,7 @@ export function useTeam() {
     role: BusinessRole;
     allowedSections?: AppSection[];
     branchId?: string;
+    posPin?: string;
   }): Promise<{ ok: boolean; error?: string; member?: TenantMember }> => {
     if (!tenant || !user) return { ok: false, error: 'Workspace session missing' };
     if (computeTrialState(tenant).isSoftLocked) {
@@ -402,6 +409,12 @@ export function useTeam() {
         createdAt: nowIso,
       });
 
+      const cleanPin = params.posPin?.trim() || '';
+      const posPinHash =
+        cleanPin && isValidPinFormat(cleanPin)
+          ? await hashStaffPin(tenant.id, cred.user.uid, cleanPin)
+          : undefined;
+
       const newMember: TenantMember = stripUndefined({
         uid: cred.user.uid,
         tenantId: tenant.id,
@@ -410,6 +423,7 @@ export function useTeam() {
         role: params.role,
         allowedSections: params.role === 'admin' ? undefined : effectiveSections,
         branchId: params.branchId || undefined,
+        posPinHash,
         status: 'active',
         createdAt: nowIso,
       });
@@ -528,7 +542,7 @@ export function useTeam() {
       Pick<
         TenantMember,
         'role' | 'allowedSections' | 'branchId' | 'status' | 'baseSalaryUgx' | 'nssfNumber' | 'tinNumber'
-      >
+      > & { posPinHash?: string | null }
     >
   ) => {
     if (!tenant || !user || user.role !== 'admin') {
@@ -583,6 +597,18 @@ export function useTeam() {
       }
     }
     if ('status' in updates && updates.status) {
+      if (updates.status === 'active' && existingMember?.status !== 'active') {
+        const activeCount =
+          members.filter((m) => m.status === 'active').length +
+          invites.filter((i) => i.status === 'pending').length;
+        const quota = getEffectivePlanQuota(tenant);
+        if (isQuotaExceeded(activeCount, quota.maxUsers)) {
+          toast.error(
+            `${quota.name} plan allows up to ${quota.maxUsers} active staff users. Upgrade in Billing or deactivate another user first.`
+          );
+          return;
+        }
+      }
       firestoreUpdates.status = updates.status;
       localUpdates.status = updates.status;
     }
@@ -615,6 +641,15 @@ export function useTeam() {
       } else {
         firestoreUpdates.tinNumber = deleteField();
         delete localUpdates.tinNumber;
+      }
+    }
+    if ('posPinHash' in updates) {
+      if (updates.posPinHash) {
+        firestoreUpdates.posPinHash = updates.posPinHash;
+        localUpdates.posPinHash = updates.posPinHash;
+      } else {
+        firestoreUpdates.posPinHash = deleteField();
+        delete localUpdates.posPinHash;
       }
     }
 
@@ -666,6 +701,67 @@ export function useTeam() {
     }
   };
 
+  const removeInactiveMember = async (memberUid: string): Promise<boolean> => {
+    if (!tenant || !user || user.role !== 'admin') {
+      toast.error('Only business admins can remove staff members');
+      return false;
+    }
+    if (memberUid === user.uid) {
+      toast.error('You cannot remove your own admin profile here');
+      return false;
+    }
+    if (!navigator.onLine) {
+      toast.error('Connect to the internet to remove a team member');
+      return false;
+    }
+
+    const target = members.find((m) => m.uid === memberUid);
+    if (!target) return false;
+    if (target.status !== 'inactive') {
+      toast.error('Deactivate the staff member first before removing them');
+      return false;
+    }
+
+    const memberPath = `tenants/${tenant.id}/members/${memberUid}`;
+    try {
+      await deleteDoc(doc(db, `tenants/${tenant.id}/members`, memberUid));
+      await deleteDoc(doc(db, 'users', memberUid)).catch(() => {});
+
+      if (target.email) {
+        const emailHash = await hashEmailForRegistry(target.email);
+        const regRef = doc(db, 'emailRegistry', emailHash);
+        const regSnap = await getDoc(regRef).catch(() => null);
+        if (regSnap?.exists() && regSnap.data()?.tenantId === tenant.id) {
+          await deleteDoc(regRef).catch(() => {});
+        }
+      }
+
+      await localDb.members.delete(memberUid).catch(() => {});
+
+      void logWorkspaceAudit({
+        tenantId: tenant.id,
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        action: 'STAFF_MEMBER_REMOVED',
+        entityType: 'team',
+        entityId: memberUid,
+        summary: `Removed inactive staff member ${target.name} (${target.email}) from workspace`,
+      });
+
+      toast.success(`${target.name} removed from team directory`);
+      return true;
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.DELETE, memberPath);
+      } catch (e) {
+        console.error(e);
+      }
+      toast.error('Failed to remove inactive staff member');
+      return false;
+    }
+  };
+
   return {
     members,
     invites,
@@ -674,5 +770,6 @@ export function useTeam() {
     createStaffAccount,
     revokeInvite,
     updateMember,
+    removeInactiveMember,
   };
 }

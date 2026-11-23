@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   CreditCard,
   CheckCircle2,
@@ -16,6 +16,8 @@ import {
   Smartphone,
   Send,
   RefreshCw,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useBilling } from '../../hooks/useBilling';
@@ -24,11 +26,27 @@ import { useTeam } from '../../hooks/useTeam';
 import { useInventory } from '../../hooks/useInventory';
 import { useBranches } from '../../hooks/useBranches';
 import { BillingPaymentMethod, Tenant } from '../../types';
-import { PLAN_QUOTAS, getEffectivePlanQuota, getDailyAiUsageCount, getPlanQuota } from '../../utils/planLimits';
+import {
+  getEffectivePlanQuota,
+  getDailyAiUsageCount,
+  getAllowedUpgradePlans,
+  getTrialDaysCount,
+} from '../../utils/planLimits';
+import {
+  PLAN_ORDER,
+  computeCycleBillingTotal,
+  usePlatformPlansConfig,
+} from '../../utils/platformPlans';
+import { usePlatformBillingConfig } from '../../utils/platformBilling';
 import { formatUGX, formatDate } from '../../utils/format';
+import { BillingHistorySkeleton } from '../../components/shared/Skeletons';
 import { BANKS } from '../../constants';
 import { parseUgandaPhone } from '../../utils/ugandaPayments';
-import { checkUgandaPaymentStatus, initiateUgandaPayment } from '../../services/aiService';
+import {
+  checkUgandaPaymentStatus,
+  checkUgandaWebhookStatus,
+  initiateUgandaPayment,
+} from '../../services/aiService';
 import { cn } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
@@ -43,82 +61,30 @@ interface PlanOption {
   popular?: boolean;
 }
 
-const PLANS: PlanOption[] = [
-  {
-    key: 'micro',
-    name: PLAN_QUOTAS.micro.name,
-    amountUgx: PLAN_QUOTAS.micro.monthlyPriceUgx,
-    period: '/month',
+const PLAN_VISUAL_META: Record<
+  Tenant['plan'],
+  { description: string; icon: React.ComponentType<{ size?: number }>; popular?: boolean }
+> = {
+  micro: {
     description: 'Perfect for small kiosks and individual shops',
-    features: PLAN_QUOTAS.micro.highlights,
     icon: Package,
   },
-  {
-    key: 'starter',
-    name: PLAN_QUOTAS.starter.name,
-    amountUgx: PLAN_QUOTAS.starter.monthlyPriceUgx,
-    period: '/month',
+  starter: {
     description: 'For emerging retail shops scaling daily operations',
-    features: PLAN_QUOTAS.starter.highlights,
     icon: Layers,
   },
-  {
-    key: 'business',
-    name: PLAN_QUOTAS.business.name,
-    amountUgx: PLAN_QUOTAS.business.monthlyPriceUgx,
-    period: '/month',
+  business: {
     description: 'Ideal for growing retail stores and multi-branch teams',
-    features: PLAN_QUOTAS.business.highlights,
     icon: Zap,
     popular: true,
   },
-  {
-    key: 'enterprise',
-    name: PLAN_QUOTAS.enterprise.name,
-    amountUgx: PLAN_QUOTAS.enterprise.monthlyPriceUgx,
-    period: '/month',
+  enterprise: {
     description: 'For large businesses with unlimited branches and staff',
-    features: PLAN_QUOTAS.enterprise.highlights,
     icon: ShieldCheck,
   },
-];
+};
 
-type BillingCheckoutChannel = 'mtn_momo' | 'airtel_money' | 'flutterwave' | 'bank_transfer';
-
-const BILLING_CHANNELS: Array<{
-  id: BillingCheckoutChannel;
-  label: string;
-  paymentMethodName: string;
-  sublabel: string;
-  dotClass?: string;
-}> = [
-  {
-    id: 'mtn_momo',
-    label: 'MTN MoMo',
-    paymentMethodName: 'MTN Mobile Money',
-    sublabel: '*165*3# / Push',
-    dotClass: 'bg-[#FFCC00]',
-  },
-  {
-    id: 'airtel_money',
-    label: 'Airtel Money',
-    paymentMethodName: 'Airtel Money',
-    sublabel: '*185*9# / Push',
-    dotClass: 'bg-[#E11D48]',
-  },
-  {
-    id: 'flutterwave',
-    label: 'Flutterwave',
-    paymentMethodName: 'Flutterwave Card/MoMo',
-    sublabel: 'Card / MoMo',
-  },
-  {
-    id: 'bank_transfer',
-    label: 'Bank Transfer',
-    paymentMethodName: 'Bank Transfer',
-    sublabel: 'EFT / RTGS',
-  },
-];
+type BillingCheckoutChannel = string;
 
 const METHOD_BADGE: Record<BillingPaymentMethod['type'], string> = {
   mtn_momo: 'MTN MoMo',
@@ -134,10 +100,13 @@ export default function Billing() {
   const { members, invites } = useTeam();
   const { products } = useInventory();
   const { branches } = useBranches();
+  const { config: platformBillingConfig } = usePlatformBillingConfig();
+  const { config: platformPlansConfig } = usePlatformPlansConfig();
 
   const [showAllInvoices, setShowAllInvoices] = useState(false);
   const [isMethodModalOpen, setIsMethodModalOpen] = useState(false);
   const [checkoutPlan, setCheckoutPlan] = useState<PlanOption | null>(null);
+  const [checkoutMonths, setCheckoutMonths] = useState<1 | 3 | 6 | 12>(1);
   const [checkoutChannel, setCheckoutChannel] = useState<BillingCheckoutChannel>('mtn_momo');
   const [checkoutPhone, setCheckoutPhone] = useState('');
   const [checkoutBank, setCheckoutBank] = useState(BANKS[0]);
@@ -145,6 +114,36 @@ export default function Billing() {
   const [checkoutTxId, setCheckoutTxId] = useState('');
   const [checkoutFeedback, setCheckoutFeedback] = useState<string | null>(null);
   const [isPrompting, setIsPrompting] = useState(false);
+  const [copiedAccount, setCopiedAccount] = useState(false);
+
+  const livePlans: PlanOption[] = useMemo(
+    () =>
+      PLAN_ORDER.map((planId) => {
+        const tier = platformPlansConfig.tiers[planId];
+        const meta = PLAN_VISUAL_META[planId];
+        return {
+          key: planId,
+          name: tier.name,
+          amountUgx: tier.monthlyPriceUgx,
+          period: '/month',
+          description: meta.description,
+          features: tier.highlights,
+          icon: meta.icon,
+          popular: meta.popular,
+        };
+      }),
+    [platformPlansConfig]
+  );
+
+  const allowedUpgradeSet = useMemo(
+    () => new Set(getAllowedUpgradePlans(tenant?.plan)),
+    [tenant?.plan, platformPlansConfig]
+  );
+
+  const checkoutPricing = useMemo(() => {
+    if (!checkoutPlan) return { grossUgx: 0, discountPercent: 0, discountUgx: 0, netUgx: 0 };
+    return computeCycleBillingTotal(checkoutPlan.amountUgx, checkoutMonths, platformPlansConfig);
+  }, [checkoutPlan, checkoutMonths, platformPlansConfig]);
 
   const [newMethod, setNewMethod] = useState<{
     type: BillingPaymentMethod['type'];
@@ -158,8 +157,19 @@ export default function Billing() {
 
   const isAdmin = user?.role === 'admin';
   const currentQuota = getEffectivePlanQuota(tenant);
-  const subscribedQuota = getPlanQuota(tenant?.plan);
   const aiUsedToday = getDailyAiUsageCount(tenant?.id);
+
+  const enabledPlatformChannels = useMemo(() => {
+    const enabled = platformBillingConfig.channels.filter((ch) => ch.enabled);
+    return enabled.length > 0 ? enabled : platformBillingConfig.channels;
+  }, [platformBillingConfig]);
+
+  const activePlatformChannel = useMemo(
+    () =>
+      enabledPlatformChannels.find((ch) => ch.id === checkoutChannel) ||
+      enabledPlatformChannels[0],
+    [enabledPlatformChannels, checkoutChannel]
+  );
 
   const activeUsersCount = useMemo(
     () =>
@@ -171,6 +181,30 @@ export default function Billing() {
   const paymentMethods = tenant?.billingPaymentMethods || [];
   const visibleHistory = showAllInvoices ? history : history.slice(0, 5);
   const parsedCheckoutPhone = useMemo(() => parseUgandaPhone(checkoutPhone), [checkoutPhone]);
+
+  useEffect(() => {
+    if (!checkoutPlan) return;
+    const lookupKey = checkoutTxId.trim() || checkoutRef.trim();
+    if (!lookupKey || checkoutFeedback?.startsWith('Confirmed paid via')) return;
+
+    const timer = window.setInterval(async () => {
+      const res = await checkUgandaWebhookStatus(lookupKey).catch(() => null);
+      if (res && res.found && res.gatewayVerified) {
+        if (res.flwRef || res.txRef) {
+          setCheckoutRef(res.flwRef || res.txRef || lookupKey);
+        }
+        if (res.transactionId && !checkoutTxId) {
+          setCheckoutTxId(res.transactionId);
+        }
+        setCheckoutFeedback(
+          `Confirmed paid via Flutterwave Webhook (${res.flwRef || res.txRef || lookupKey}). Submit below to finalize.`
+        );
+        toast.success('Payment confirmed automatically via Flutterwave!');
+      }
+    }, 4500);
+
+    return () => window.clearInterval(timer);
+  }, [checkoutPlan, checkoutTxId, checkoutRef, checkoutFeedback]);
 
   const getSavedRefForChannel = (channel: BillingCheckoutChannel): string => {
     const primary = paymentMethods.find((m) => m.isPrimary);
@@ -189,7 +223,7 @@ export default function Billing() {
       return;
     }
     const primary = paymentMethods.find((m) => m.isPrimary);
-    const defaultChannel: BillingCheckoutChannel =
+    const preferredId: BillingCheckoutChannel =
       primary?.type === 'airtel_money'
         ? 'airtel_money'
         : primary?.type === 'bank_transfer'
@@ -197,19 +231,26 @@ export default function Billing() {
         : primary?.type === 'card'
         ? 'flutterwave'
         : 'mtn_momo';
+    const defaultChannel =
+      enabledPlatformChannels.find((ch) => ch.id === preferredId)?.id ||
+      enabledPlatformChannels[0]?.id ||
+      'mtn_momo';
 
     setCheckoutPlan(plan);
+    setCheckoutMonths(1);
     setCheckoutChannel(defaultChannel);
     setCheckoutPhone(getSavedRefForChannel(defaultChannel));
-    setCheckoutBank(BANKS[0]);
+    setCheckoutBank(activePlatformChannel?.bankName || BANKS[0]);
     setCheckoutRef('');
     setCheckoutTxId('');
     setCheckoutFeedback(null);
+    setCopiedAccount(false);
   };
 
   const handleChannelChange = (channel: BillingCheckoutChannel) => {
     setCheckoutChannel(channel);
     setCheckoutFeedback(null);
+    setCopiedAccount(false);
     if (channel === 'mtn_momo' || channel === 'airtel_money') {
       const saved = getSavedRefForChannel(channel);
       if (saved && !checkoutPhone.trim()) {
@@ -240,7 +281,7 @@ export default function Billing() {
       const res = await initiateUgandaPayment({
         provider: checkoutChannel,
         phone: parsedCheckoutPhone.e164,
-        amountUgx: checkoutPlan.amountUgx,
+        amountUgx: checkoutPricing.netUgx,
         reference: clientRef,
         customerName: tenant?.name || user?.name,
         email: user?.email,
@@ -297,15 +338,18 @@ export default function Billing() {
       return;
     }
 
-    const activeChannel = BILLING_CHANNELS.find((c) => c.id === checkoutChannel)!;
+    const activeChannel = activePlatformChannel || enabledPlatformChannels[0];
+    const channelId = activeChannel?.id || checkoutChannel;
+    const channelName = activeChannel?.paymentMethodName || 'Manual Payment';
     const methodLabel =
-      checkoutChannel === 'bank_transfer' ? `${activeChannel.paymentMethodName} (${checkoutBank})` : activeChannel.paymentMethodName;
+      channelId === 'bank_transfer' ? `${channelName} (${checkoutBank})` : channelName;
 
-    const ok = await selectPlan(checkoutPlan.key, checkoutPlan.name, checkoutPlan.amountUgx, {
+    const cycleLabel = checkoutMonths > 1 ? `${checkoutPlan.name} (${checkoutMonths} Months)` : checkoutPlan.name;
+    const ok = await selectPlan(checkoutPlan.key, cycleLabel, checkoutPricing.netUgx, {
       paymentMethod: methodLabel,
       reference: cleanRef,
       transactionId: checkoutTxId.trim() || undefined,
-      provider: checkoutChannel,
+      provider: channelId,
       payerPhone: parsedCheckoutPhone.valid ? parsedCheckoutPhone.e164 : undefined,
     });
     if (ok) {
@@ -380,7 +424,7 @@ export default function Billing() {
             <div className="flex items-center gap-2 px-4 py-2 bg-accent/10 text-accent rounded-lg border border-accent/25 text-sm font-semibold">
               <CheckCircle2 size={18} />
               <span>
-                Complimentary Free · {PLANS.find((p) => p.key === tenant?.plan)?.name || tenant?.plan}
+                Complimentary Free · {livePlans.find((p) => p.key === tenant?.plan)?.name || tenant?.plan}
               </span>
             </div>
           ) : trialState.isSoftLocked ? (
@@ -408,7 +452,7 @@ export default function Billing() {
             <div className="flex items-center gap-2 px-4 py-2 bg-primary/5 text-primary rounded-lg border border-border text-sm font-semibold">
               <CheckCircle2 size={18} className="text-accent" />
               <span>
-                Active: {PLANS.find((p) => p.key === tenant?.plan)?.name || tenant?.plan}
+                Active: {livePlans.find((p) => p.key === tenant?.plan)?.name || tenant?.plan}
                 {trialState.effectiveEndsAt
                   ? ` · Expires ${formatDate(trialState.effectiveEndsAt.toISOString())}`
                   : ''}
@@ -446,7 +490,7 @@ export default function Billing() {
                   ? 'Your workspace has been disabled by the platform administrator'
                   : !trialState.isTrial && trialState.effectiveEndsAt
                   ? 'Your subscription period has ended — your business data is safe'
-                  : 'Your 14-day free trial has ended — your business data is safe'}
+                  : `Your ${platformPlansConfig.trialDays || getTrialDaysCount()}-day free trial has ended — your business data is safe`}
               </h2>
               <p className="text-sm text-text-secondary mt-0.5">
                 {trialState.isSuspended && tenant?.disabledReason
@@ -464,9 +508,13 @@ export default function Billing() {
           <div>
             <h2 className="text-base font-bold text-primary">Current Workspace Quota Usage</h2>
             <p className="text-xs text-text-muted">
-              {trialState.isTrial && !trialState.isSoftLocked
-                ? `14-Day Trial (Evaluating ${currentQuota.name} features)`
-                : `Limits enforced for ${subscribedQuota.name} (${formatUGX(subscribedQuota.monthlyPriceUgx)}/month)`}
+              {`Limits strictly enforced for ${currentQuota.name} (${formatUGX(
+                currentQuota.monthlyPriceUgx
+              )}/month)${
+                trialState.isTrial && !trialState.isSoftLocked
+                  ? ` · ${platformPlansConfig.trialDays || getTrialDaysCount()}-Day Free Trial`
+                  : ''
+              }`}
               {trialState.subscribedAt ? ` · Subscribed ${formatDate(trialState.subscribedAt.toISOString())}` : ''}
               {trialState.subscriptionEndsAt ? ` · Renews ${formatDate(trialState.subscriptionEndsAt.toISOString())}` : ''}
             </p>
@@ -520,10 +568,22 @@ export default function Billing() {
         </div>
       </div>
 
+      {platformPlansConfig.upgradeHeadline && (
+        <div className="p-3.5 rounded-xl border border-border bg-white text-xs text-text-secondary flex flex-wrap items-center justify-between gap-2">
+          <span>{platformPlansConfig.upgradeHeadline}</span>
+          <span className="font-mono text-[11px] font-semibold text-primary">
+            Multi-month savings: 3m ({platformPlansConfig.multiMonthDiscounts.m3}% off) · 6m (
+            {platformPlansConfig.multiMonthDiscounts.m6}% off) · 12m (
+            {platformPlansConfig.multiMonthDiscounts.m12}% off)
+          </span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-        {PLANS.map((plan) => {
+        {livePlans.map((plan) => {
           const isCurrentPlan = tenant?.plan === plan.key;
           const isPendingThisPlan = tenant?.pendingPlan === plan.key;
+          const isAllowedUpgradePath = allowedUpgradeSet.has(plan.key);
           const isCurrentComplimentaryActive =
             isCurrentPlan &&
             trialState.isComplimentary &&
@@ -538,7 +598,8 @@ export default function Billing() {
             isUpdating ||
             isPendingThisPlan ||
             isCurrentComplimentaryActive ||
-            isCurrentActiveFarFromExpiry;
+            isCurrentActiveFarFromExpiry ||
+            !isAllowedUpgradePath;
           const effectivePlanPrice =
             isCurrentPlan && typeof tenant?.customPriceUgx === 'number'
               ? tenant.customPriceUgx
@@ -546,6 +607,8 @@ export default function Billing() {
 
           const buttonLabel = isPendingThisPlan
             ? 'Pending Approval'
+            : !isAllowedUpgradePath
+            ? 'Path Restricted by Admin'
             : isCurrentComplimentaryActive
             ? 'Complimentary Active'
             : isCurrentActiveFarFromExpiry
@@ -556,7 +619,7 @@ export default function Billing() {
             ? 'Renew & Unlock'
             : isCurrentPlan
             ? 'Activate Plan'
-            : 'Select Plan';
+            : 'Upgrade to ' + plan.name;
 
           return (
             <div
@@ -703,9 +766,7 @@ export default function Billing() {
           </div>
           <div className="space-y-3">
             {isLoading ? (
-              <div className="py-8 text-center">
-                <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-              </div>
+              <BillingHistorySkeleton rows={4} />
             ) : visibleHistory.length > 0 ? (
               visibleHistory.map((inv) => (
                 <div
@@ -713,7 +774,14 @@ export default function Billing() {
                   className="flex items-center justify-between gap-3 p-3 border-b border-border last:border-0"
                 >
                   <div className="min-w-0">
-                    <p className="font-semibold text-primary truncate">{inv.reference}</p>
+                    <p className="font-semibold text-primary truncate flex items-center gap-2">
+                      <span className="truncate">{inv.reference}</span>
+                      {inv.gatewayVerified && (
+                        <span className="text-[10px] font-bold uppercase text-accent shrink-0">
+                          Gateway Verified
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-text-muted">
                       {formatDate(inv.createdAt)}
                       {inv.plan ? ` • ${inv.plan.toUpperCase()}` : ''}
@@ -762,7 +830,7 @@ export default function Billing() {
       {/* Plan Activation Checkout Modal (Uganda Providers) */}
       {checkoutPlan && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="bg-white sm:rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[92vh]">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[92dvh]">
             <div className="p-5 sm:p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white">Uganda Subscription Checkout</h3>
@@ -779,21 +847,73 @@ export default function Billing() {
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleConfirmCheckout} className="p-5 sm:p-6 space-y-4 overflow-y-auto">
+            <form onSubmit={handleConfirmCheckout} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
+              <div>
+                <label className="block text-xs font-bold text-primary uppercase tracking-wider mb-1.5">
+                  Billing Cycle
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {([1, 3, 6, 12] as const).map((m) => {
+                    const disc =
+                      m === 1
+                        ? platformPlansConfig.multiMonthDiscounts.m1
+                        : m === 3
+                        ? platformPlansConfig.multiMonthDiscounts.m3
+                        : m === 6
+                        ? platformPlansConfig.multiMonthDiscounts.m6
+                        : platformPlansConfig.multiMonthDiscounts.m12;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setCheckoutMonths(m)}
+                        className={cn(
+                          'p-2 rounded-lg border text-center transition-all',
+                          checkoutMonths === m
+                            ? 'border-accent bg-accent/10 text-primary font-bold'
+                            : 'border-border bg-white text-text-secondary hover:bg-surface-alt/50'
+                        )}
+                      >
+                        <span className="block text-xs">{m} Mo{m > 1 ? 's' : ''}</span>
+                        {disc > 0 && (
+                          <span className="block text-[10px] font-bold text-accent">-{disc}%</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="p-3.5 rounded-xl bg-surface-alt border border-border flex items-center justify-between">
-                <span className="text-xs font-bold text-text-muted uppercase">Amount Due</span>
+                <div>
+                  <span className="text-xs font-bold text-text-muted uppercase block">
+                    Amount Due ({checkoutMonths} mo{checkoutMonths > 1 ? 's' : ''})
+                  </span>
+                  {checkoutPricing.discountUgx > 0 && (
+                    <span className="text-[11px] text-accent font-semibold">
+                      Includes {checkoutPricing.discountPercent}% multi-month savings (-
+                      {formatUGX(checkoutPricing.discountUgx)})
+                    </span>
+                  )}
+                </div>
                 <span className="text-xl font-black text-primary font-mono tabular-nums">
-                  {formatUGX(checkoutPlan.amountUgx)}
+                  {formatUGX(checkoutPricing.netUgx)}
                 </span>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-primary uppercase tracking-wider mb-2">
-                  Select Ugandan Payment Channel
+                  Select Platform Payment Channel
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {BILLING_CHANNELS.map((ch) => {
-                    const active = checkoutChannel === ch.id;
+                  {enabledPlatformChannels.map((ch) => {
+                    const active = activePlatformChannel?.id === ch.id;
+                    const dotClass =
+                      ch.id === 'mtn_momo'
+                        ? 'bg-[#FFCC00]'
+                        : ch.id === 'airtel_money'
+                        ? 'bg-[#E11D48]'
+                        : undefined;
                     return (
                       <button
                         key={ch.id}
@@ -814,34 +934,102 @@ export default function Billing() {
                           ) : (
                             <Building2 size={15} className={active ? 'text-accent' : 'text-primary'} />
                           )}
-                          {ch.dotClass && <span className={cn('w-2.5 h-2.5 rounded-full', ch.dotClass)} />}
+                          {dotClass && <span className={cn('w-2.5 h-2.5 rounded-full', dotClass)} />}
                         </div>
                         <span className="text-xs font-bold text-primary leading-tight">{ch.label}</span>
-                        <span className="text-[10px] text-text-muted leading-tight">{ch.sublabel}</span>
+                        <span className="text-[10px] text-text-muted leading-tight">
+                          {ch.sublabel || 'Verified Channel'}
+                        </span>
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {(checkoutChannel === 'mtn_momo' || checkoutChannel === 'airtel_money') && (
+              {activePlatformChannel &&
+                (activePlatformChannel.accountName ||
+                  activePlatformChannel.accountNumber ||
+                  activePlatformChannel.bankName ||
+                  activePlatformChannel.ussdPrefix ||
+                  activePlatformChannel.instructions) && (
+                  <div className="p-3.5 rounded-xl border border-accent/25 bg-accent/5 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-primary">
+                        {activePlatformChannel.paymentMethodName} Receiving Details
+                      </span>
+                      {activePlatformChannel.ussdPrefix && (
+                        <span className="font-mono font-bold text-accent">
+                          {activePlatformChannel.ussdPrefix}
+                        </span>
+                      )}
+                    </div>
+                    {activePlatformChannel.accountName && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-text-secondary">Account / Merchant Name</span>
+                        <strong className="text-primary">{activePlatformChannel.accountName}</strong>
+                      </div>
+                    )}
+                    {activePlatformChannel.bankName && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-text-secondary">Bank</span>
+                        <strong className="text-primary">{activePlatformChannel.bankName}</strong>
+                      </div>
+                    )}
+                    {activePlatformChannel.accountNumber ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-text-secondary">Number / Code / Account</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(activePlatformChannel.accountNumber || '');
+                            setCopiedAccount(true);
+                            toast.success('Copied receiving account details');
+                            window.setTimeout(() => setCopiedAccount(false), 2000);
+                          }}
+                          className="inline-flex items-center gap-1.5 font-mono font-bold text-primary hover:text-accent"
+                        >
+                          <span>{activePlatformChannel.accountNumber}</span>
+                          {copiedAccount ? <Check size={13} className="text-accent" /> : <Copy size={13} />}
+                        </button>
+                      </div>
+                    ) : activePlatformChannel.id !== 'flutterwave' ? (
+                      <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                        Direct merchant code / account number has not been published yet. Use the Flutterwave push prompt or contact Billing Support below.
+                      </p>
+                    ) : null}
+                    {activePlatformChannel.instructions && (
+                      <p className="text-text-secondary pt-1 border-t border-accent/15 leading-relaxed">
+                        {activePlatformChannel.instructions}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+              {(activePlatformChannel?.id === 'mtn_momo' ||
+                activePlatformChannel?.id === 'airtel_money') && (
                 <div className="p-3.5 rounded-xl bg-surface-alt/50 border border-border space-y-3">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-bold text-primary">
-                      {checkoutChannel === 'mtn_momo' ? 'MTN MoMo Pay (*165*3#)' : 'Airtel Money Pay (*185*9#)'}
+                      {activePlatformChannel.id === 'mtn_momo'
+                        ? 'MTN MoMo Pay (*165*3#)'
+                        : 'Airtel Money Pay (*185*9#)'}
                     </span>
                     <span className="text-[11px] text-text-muted">
-                      {checkoutChannel === 'mtn_momo' ? '077 / 078 / 076' : '070 / 075 / 074'}
+                      {activePlatformChannel.id === 'mtn_momo'
+                        ? '077 / 078 / 076'
+                        : '070 / 075 / 074'}
                     </span>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-primary mb-1">
-                      Payer {checkoutChannel === 'mtn_momo' ? 'MTN' : 'Airtel'} Phone Number
+                      Payer {activePlatformChannel.id === 'mtn_momo' ? 'MTN' : 'Airtel'} Phone Number
                     </label>
                     <input
                       type="tel"
                       className="input w-full bg-white font-mono"
-                      placeholder={checkoutChannel === 'mtn_momo' ? '0772 123 456' : '0752 123 456'}
+                      placeholder={
+                        activePlatformChannel.id === 'mtn_momo' ? '0772 123 456' : '0752 123 456'
+                      }
                       value={checkoutPhone}
                       onChange={(e) => setCheckoutPhone(e.target.value)}
                     />
@@ -851,8 +1039,10 @@ export default function Billing() {
                           'text-[11px] mt-1 font-medium',
                           !parsedCheckoutPhone.valid
                             ? 'text-danger'
-                            : (checkoutChannel === 'mtn_momo' && parsedCheckoutPhone.carrier === 'AIRTEL') ||
-                              (checkoutChannel === 'airtel_money' && parsedCheckoutPhone.carrier === 'MTN')
+                            : (activePlatformChannel.id === 'mtn_momo' &&
+                                parsedCheckoutPhone.carrier === 'AIRTEL') ||
+                              (activePlatformChannel.id === 'airtel_money' &&
+                                parsedCheckoutPhone.carrier === 'MTN')
                             ? 'text-accent-alt'
                             : 'text-accent'
                         )}
@@ -893,7 +1083,7 @@ export default function Billing() {
                 </div>
               )}
 
-              {checkoutChannel === 'bank_transfer' && (
+              {activePlatformChannel?.id === 'bank_transfer' && (
                 <div>
                   <label className="block text-xs font-bold text-primary mb-1">Ugandan Bank *</label>
                   <select
@@ -920,11 +1110,11 @@ export default function Billing() {
                   type="text"
                   className="input w-full font-mono"
                   placeholder={
-                    checkoutChannel === 'mtn_momo'
+                    activePlatformChannel?.id === 'mtn_momo'
                       ? 'e.g. MP250411.1234.C56789'
-                      : checkoutChannel === 'airtel_money'
+                      : activePlatformChannel?.id === 'airtel_money'
                       ? 'e.g. AM250411.9812.B441'
-                      : checkoutChannel === 'bank_transfer'
+                      : activePlatformChannel?.id === 'bank_transfer'
                       ? 'e.g. STANBIC-EFT-882410'
                       : 'e.g. FLW-TX-902814'
                   }
@@ -947,6 +1137,22 @@ export default function Billing() {
                 <p className="text-[11px] text-text-muted mt-1">
                   Submitted to the Master Account for verification &amp; approval before activating your plan.
                 </p>
+                {(platformBillingConfig.supportPhone ||
+                  platformBillingConfig.supportEmail ||
+                  platformBillingConfig.supportWhatsapp) && (
+                  <p className="text-[11px] text-text-secondary mt-1">
+                    Billing Support:{' '}
+                    {[
+                      platformBillingConfig.supportPhone,
+                      platformBillingConfig.supportWhatsapp
+                        ? `WhatsApp ${platformBillingConfig.supportWhatsapp}`
+                        : '',
+                      platformBillingConfig.supportEmail,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                )}
               </div>
 
               <div className="pt-2 flex gap-3">
@@ -967,9 +1173,9 @@ export default function Billing() {
       )}
 
       {isMethodModalOpen && (
-        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white">
+        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 sm:p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div className="flex items-center gap-3">
                 <CreditCard size={22} />
                 <h3 className="text-lg font-bold text-white">Add Payment Method</h3>
@@ -983,7 +1189,7 @@ export default function Billing() {
                 <X size={22} />
               </button>
             </div>
-            <form onSubmit={handleAddMethod} className="p-6 space-y-4">
+            <form onSubmit={handleAddMethod} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-sm font-bold text-primary mb-1">Method Type</label>
                 <select

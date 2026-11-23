@@ -8,6 +8,7 @@ import { doc, setDoc, deleteDoc, collection } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
+import { canAccessFeature } from '../utils/planLimits';
 import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
 
@@ -45,6 +46,10 @@ export function useSuppliers() {
     if (!user?.tenantId) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!canAccessFeature(tenant, 'suppliersAndPOs')) {
+      toast.error('Suppliers & Payables require Starter plan or higher. Upgrade in Billing.');
       return;
     }
     const phone = (supplierData.phone || '').trim();
@@ -133,6 +138,10 @@ export function useSuppliers() {
     if (!user?.tenantId) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!canAccessFeature(tenant, 'suppliersAndPOs')) {
+      toast.error('Suppliers & Payables require Starter plan or higher. Upgrade in Billing.');
       return;
     }
     if (updates.phone !== undefined && updates.phone.trim().length < 10) {
@@ -271,10 +280,135 @@ export function useSuppliers() {
     }
   };
 
+  const bulkImportSuppliers = async (
+    rows: Array<{
+      name: string;
+      contactPerson?: string;
+      phone: string;
+      email?: string;
+      address?: string;
+      category?: string;
+      currentBalance?: number;
+      status?: 'active' | 'inactive';
+    }>
+  ): Promise<number> => {
+    if (!user?.tenantId) return 0;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return 0;
+    }
+    if (!canAccessFeature(tenant, 'suppliersAndPOs')) {
+      toast.error('Suppliers & Payables require Starter plan or higher. Upgrade in Billing.');
+      return 0;
+    }
+
+    const existingSuppliers = await localDb.suppliers.where('tenantId').equals(user.tenantId).toArray();
+    const usedEmails = new Set(
+      existingSuppliers.map((s) => (s.email || '').trim().toLowerCase()).filter(Boolean)
+    );
+
+    const nowIso = new Date().toISOString();
+    const toCreate: Supplier[] = [];
+    let skippedConflicts = 0;
+
+    for (const row of rows) {
+      const name = String(row.name || '').trim().slice(0, 150);
+      const phone = String(row.phone || '').trim().slice(0, 30);
+      if (!name || phone.length < 10) continue;
+
+      const cleanEmail = String(row.email || '').trim().toLowerCase().slice(0, 254);
+      if (cleanEmail && usedEmails.has(cleanEmail)) {
+        skippedConflicts++;
+        continue;
+      }
+      if (cleanEmail) usedEmails.add(cleanEmail);
+
+      toCreate.push(
+        stripUndefined({
+          id: crypto.randomUUID(),
+          tenantId: user.tenantId,
+          name,
+          contactPerson: row.contactPerson ? String(row.contactPerson).trim().slice(0, 120) : undefined,
+          phone,
+          email: cleanEmail || undefined,
+          address: row.address ? String(row.address).trim().slice(0, 250) : undefined,
+          category: String(row.category || 'Wholesale').trim().slice(0, 80) || 'Wholesale',
+          currentBalance: Math.max(0, Number(row.currentBalance) || 0),
+          status: row.status === 'inactive' ? 'inactive' : 'active',
+          createdAt: nowIso,
+        })
+      );
+    }
+
+    if (toCreate.length === 0) {
+      toast.error(
+        skippedConflicts > 0
+          ? 'Skipped suppliers with duplicate email addresses.'
+          : 'No valid supplier rows to import (name and 10+ digit phone required).'
+      );
+      return 0;
+    }
+
+    await localDb.suppliers.bulkPut(toCreate);
+    if (navigator.onLine) {
+      const CHUNK_SIZE = 12;
+      for (let i = 0; i < toCreate.length; i += CHUNK_SIZE) {
+        const chunk = toCreate.slice(i, i + CHUNK_SIZE);
+        await Promise.all(
+          chunk.map(async (supplier) => {
+            try {
+              const supplierRef = doc(collection(db, 'tenants', user.tenantId, 'suppliers'), supplier.id);
+              await setDoc(supplierRef, supplier);
+            } catch {
+              await localDb.syncQueue.add({
+                tenantId: user.tenantId,
+                table: 'suppliers',
+                action: 'create',
+                data: supplier,
+                status: 'pending',
+                createdAt: Date.now(),
+              });
+            }
+          })
+        );
+      }
+    } else {
+      await localDb.syncQueue.bulkAdd(
+        toCreate.map((supplier) => ({
+          tenantId: user.tenantId,
+          table: 'suppliers' as const,
+          action: 'create' as const,
+          data: supplier,
+          status: 'pending' as const,
+          createdAt: Date.now(),
+        }))
+      );
+    }
+
+    void logWorkspaceAudit({
+      tenantId: user.tenantId,
+      branchId: user.branchId,
+      actorId: user.uid,
+      actorName: user.name,
+      actorRole: user.role,
+      action: 'SUPPLIER_BULK_IMPORT',
+      entityType: 'supplier',
+      summary: `Imported ${toCreate.length} supplier(s) via Smart Import`,
+    });
+
+    toast.success(
+      `Imported ${toCreate.length} supplier${toCreate.length === 1 ? '' : 's'}${
+        skippedConflicts > 0 ? ` (${skippedConflicts} duplicate email skipped)` : ''
+      }`
+    );
+    return toCreate.length;
+  };
+
   return {
     suppliers,
     loading,
     addSupplier,
+    bulkImportSuppliers,
     updateSupplier,
     deleteSupplier,
   };

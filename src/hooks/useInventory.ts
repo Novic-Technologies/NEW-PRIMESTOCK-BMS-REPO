@@ -130,7 +130,8 @@ export function useInventory() {
   };
 
   const bulkImportProducts = async (
-    rows: Array<Omit<Product, 'id' | 'tenantId' | 'createdAt'>>
+    rows: Array<Omit<Product, 'id' | 'tenantId' | 'createdAt'>>,
+    sourceLabel = 'Smart Import'
   ): Promise<number> => {
     if (!tenant || !user) return 0;
     if (computeTrialState(tenant).isSoftLocked) {
@@ -152,19 +153,34 @@ export function useInventory() {
       return 0;
     }
 
-    const rowsToImport = rows.slice(0, availableSlots);
+    const validRows = rows.filter((r) => String(r.name || '').trim().length > 0);
+    const rowsToImport = validRows.slice(0, availableSlots);
     const targetBranch = activeBranchId && activeBranchId !== 'ALL' ? activeBranchId : user.branchId;
     const nowIso = new Date().toISOString();
 
-    const productsToCreate: Product[] = rowsToImport.map((item) =>
-      stripUndefined({
-        ...item,
-        branchStock: targetBranch ? { [targetBranch]: Number(item.currentStock) || 0 } : undefined,
+    const productsToCreate: Product[] = rowsToImport.map((item) => {
+      const stock = Math.max(0, Number(item.currentStock) || 0);
+      return stripUndefined({
+        name: String(item.name).trim().slice(0, 150),
+        category: String(item.category || 'General').trim().slice(0, 80) || 'General',
+        sku: item.sku ? String(item.sku).trim().slice(0, 64) : undefined,
+        barcode: item.barcode ? String(item.barcode).trim().slice(0, 64) : undefined,
+        buyingPrice: Math.max(0, Number(item.buyingPrice) || 0),
+        sellingPrice: Math.max(0, Number(item.sellingPrice) || 0),
+        wholesalePrice: item.wholesalePrice && Number(item.wholesalePrice) > 0 ? Number(item.wholesalePrice) : undefined,
+        vipPrice: item.vipPrice && Number(item.vipPrice) > 0 ? Number(item.vipPrice) : undefined,
+        currentStock: stock,
+        minStockLevel: Math.max(0, Number(item.minStockLevel ?? 5) || 0),
+        unit: String(item.unit || 'pcs').trim().slice(0, 32) || 'pcs',
+        batchNumber: item.batchNumber ? String(item.batchNumber).trim().slice(0, 64) : undefined,
+        expiryDate: item.expiryDate ? String(item.expiryDate).trim().slice(0, 32) : undefined,
+        status: item.status === 'inactive' ? 'inactive' : 'active',
+        branchStock: targetBranch ? { [targetBranch]: stock } : undefined,
         id: crypto.randomUUID(),
         tenantId: tenant.id,
         createdAt: nowIso,
-      })
-    );
+      });
+    });
 
     if (productsToCreate.length > 0) {
       await localDb.products.bulkPut(productsToCreate);
@@ -210,13 +226,18 @@ export function useInventory() {
         actorRole: user.role,
         action: 'PRODUCT_BULK_IMPORT',
         entityType: 'product',
-        summary: `Imported ${productsToCreate.length} products via CSV`,
+        summary: `Imported ${productsToCreate.length} products via ${sourceLabel}`,
       });
     }
 
     const importedCount = productsToCreate.length;
-
-    toast.success(`Imported ${importedCount} product${importedCount === 1 ? '' : 's'}`);
+    if (validRows.length > importedCount) {
+      toast.success(
+        `Imported ${importedCount} product(s). ${validRows.length - importedCount} skipped due to ${quota.name} plan SKU cap.`
+      );
+    } else {
+      toast.success(`Imported ${importedCount} product${importedCount === 1 ? '' : 's'}`);
+    }
     return importedCount;
   };
 

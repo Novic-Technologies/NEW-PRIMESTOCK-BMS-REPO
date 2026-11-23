@@ -6,6 +6,7 @@ import { localDb } from '../services/db';
 import { useAuthStore } from '../store/authStore';
 import { Expense, PayrollEntry, PayrollRun } from '../types';
 import { computeTrialState } from '../utils/trialUtils';
+import { canAccessFeature } from '../utils/planLimits';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
@@ -43,6 +44,10 @@ export function usePayroll() {
     if (!tenant || !user) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!canAccessFeature(tenant, 'payrollPayeNssf')) {
+      toast.error('Uganda PAYE & NSSF Payroll requires Business Growth or Enterprise plan.');
       return;
     }
     if (user.role !== 'admin' && user.role !== 'accountant') {

@@ -34,10 +34,11 @@ import { format } from 'date-fns';
 import { formatUGX } from '../../utils/format';
 import { getEffectiveStock } from '../../utils/branchStock';
 import { downloadCsv } from '../../utils/exportCsv';
+import { PageContentSkeleton } from '../../components/shared/Skeletons';
 import { cn } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
-const COLORS = ['#0A2540', '#00C37F', '#F5A623', '#EF4444', '#3B82F6', '#8B5CF6'];
+const COLORS = ['#0B1F3A', '#0F766E', '#B45309', '#DC2626', '#2563EB', '#475569'];
 
 type DateRangeKey = '7d' | '30d' | '180d' | 'all';
 type ChartSeriesFilter = 'both' | 'revenue' | 'expenses';
@@ -65,11 +66,12 @@ function formatTrend(current: number, previous: number, periodLabel: string) {
 
 export default function Reports() {
   const { tenant } = useAuthStore();
-  const { products } = useInventory();
-  const { sales } = usePOS();
-  const { expenses } = useExpenses();
+  const { products, isLoading: productsLoading } = useInventory();
+  const { sales, isLoading: salesLoading } = usePOS();
+  const { expenses, isLoading: expensesLoading } = useExpenses();
   const { purchaseOrders } = usePurchaseOrders();
   const { activeBranchId, activeBranch } = useBranches();
+  const isInitialLoading = productsLoading || salesLoading || expensesLoading;
 
   const [reportTab, setReportTab] = useState<ReportTab>('overview');
   const [dateRange, setDateRange] = useState<DateRangeKey>('30d');
@@ -433,6 +435,10 @@ export default function Reports() {
     );
   };
 
+  if (isInitialLoading && products.length === 0 && sales.length === 0 && expenses.length === 0) {
+    return <PageContentSkeleton variant="dashboard" />;
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -473,7 +479,7 @@ export default function Reports() {
       </div>
 
       {/* Report Mode Tabs */}
-      <div className="flex items-center gap-1 p-1 bg-surface-alt rounded-lg border border-border self-start w-fit">
+      <div className="flex items-center gap-1 p-1 bg-surface-alt rounded-lg border border-border self-start w-fit max-w-full overflow-x-auto">
         {[
           { key: 'overview', label: 'Overview' },
           { key: 'margin', label: 'Profit & Margin (COGS)' },
@@ -554,15 +560,15 @@ export default function Reports() {
                   <AreaChart data={revenueVsExpensesData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                     <defs>
                       <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#00C37F" stopOpacity={0.18} />
-                        <stop offset="95%" stopColor="#00C37F" stopOpacity={0} />
+                        <stop offset="5%" stopColor="#0F766E" stopOpacity={0.16} />
+                        <stop offset="95%" stopColor="#0F766E" stopOpacity={0} />
                       </linearGradient>
                       <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#EF4444" stopOpacity={0.18} />
-                        <stop offset="95%" stopColor="#EF4444" stopOpacity={0} />
+                        <stop offset="5%" stopColor="#DC2626" stopOpacity={0.16} />
+                        <stop offset="95%" stopColor="#DC2626" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#D5DEE9" />
                     <XAxis
                       dataKey="name"
                       axisLine={false}
@@ -571,6 +577,7 @@ export default function Reports() {
                       dy={10}
                     />
                     <YAxis
+                      width={52}
                       axisLine={false}
                       tickLine={false}
                       tick={{ fill: '#64748B', fontSize: 11, fontWeight: 600 }}
@@ -582,8 +589,8 @@ export default function Reports() {
                       formatter={(value: any) => formatUGX(Number(value || 0))}
                       contentStyle={{
                         borderRadius: '12px',
-                        border: '1px solid #E2E8F0',
-                        boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)',
+                        border: '1px solid #D5DEE9',
+                        boxShadow: '0 10px 25px -5px rgb(11 31 58 / 0.1)',
                         padding: '10px 12px',
                       }}
                     />
@@ -592,8 +599,8 @@ export default function Reports() {
                         type="monotone"
                         dataKey="revenue"
                         name="Revenue"
-                        stroke="#00C37F"
-                        strokeWidth={3}
+                        stroke="#0F766E"
+                        strokeWidth={2.5}
                         fillOpacity={1}
                         fill="url(#colorRevenue)"
                       />
@@ -603,8 +610,8 @@ export default function Reports() {
                         type="monotone"
                         dataKey="expenses"
                         name="Expenses"
-                        stroke="#EF4444"
-                        strokeWidth={3}
+                        stroke="#DC2626"
+                        strokeWidth={2.5}
                         fillOpacity={1}
                         fill="url(#colorExpenses)"
                       />
@@ -697,7 +704,37 @@ export default function Reports() {
                 </button>
               )}
             </div>
-            <div className="overflow-x-auto">
+            <div className="md:hidden divide-y divide-border">
+              {visibleTransactions.length === 0 ? (
+                <div className="px-4 py-10 text-center text-text-muted text-sm">
+                  No transactions recorded for this period
+                </div>
+              ) : (
+                visibleTransactions.map((tx) => (
+                  <div key={tx.id} className="p-4 space-y-1.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-bold text-primary text-sm min-w-0 break-words">
+                        {tx.reference}
+                      </p>
+                      <span className="font-mono tabular-nums font-bold text-sm text-primary shrink-0">
+                        {formatUGX(tx.amount)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-text-muted">
+                      <span>{tx.dateLabel}</span>
+                      <div className="flex items-center gap-2 uppercase font-bold">
+                        <span className={tx.type === 'Sale' ? 'text-accent' : 'text-danger'}>
+                          {tx.type}
+                        </span>
+                        <span className="text-text-secondary">· {tx.status}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left min-w-[700px]">
                 <thead>
                   <tr className="bg-surface-alt/50 text-text-muted text-[11px] font-bold uppercase tracking-widest">
@@ -786,7 +823,39 @@ export default function Reports() {
             <div className="p-5 border-b border-border bg-surface-alt/40">
               <h3 className="font-bold text-primary">Product Profit &amp; Margin Leaderboard</h3>
             </div>
-            <div className="overflow-x-auto">
+            <div className="md:hidden divide-y divide-border">
+              {marginSummary.productRows.length === 0 ? (
+                <div className="px-4 py-10 text-center text-text-muted text-sm">
+                  No completed product sales in this date range
+                </div>
+              ) : (
+                marginSummary.productRows.map((row, idx) => {
+                  const pct = row.revenue > 0 ? ((row.profit / row.revenue) * 100).toFixed(1) : '0.0';
+                  return (
+                    <div key={idx} className="p-4 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-bold text-primary text-sm">{row.name}</p>
+                        <span
+                          className={cn(
+                            'font-mono tabular-nums font-bold text-sm shrink-0',
+                            row.profit >= 0 ? 'text-accent' : 'text-danger'
+                          )}
+                        >
+                          {formatUGX(row.profit)} ({pct}%)
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-xs text-text-secondary font-mono tabular-nums">
+                        <span>Qty: {row.qty}</span>
+                        <span>Rev: {formatUGX(row.revenue)}</span>
+                        <span className="text-right">COGS: {formatUGX(row.cogs)}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left border-collapse min-w-[760px]">
                 <thead>
                   <tr className="bg-surface-alt/50 border-b border-border text-xs font-bold text-text-muted uppercase tracking-wider">

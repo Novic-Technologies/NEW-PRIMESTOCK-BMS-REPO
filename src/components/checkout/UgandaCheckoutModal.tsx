@@ -349,7 +349,7 @@ export function UgandaCheckoutModal({
 
   return (
     <div className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 no-print">
-      <div className="bg-white w-full max-w-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+      <div className="bg-white w-full max-w-2xl rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
           <div>
@@ -768,9 +768,12 @@ export function UgandaCheckoutModal({
           {tab === 'split' && (
             <div className="p-4 rounded-xl border border-border bg-surface-alt/40 space-y-3">
               {splitParts.map((part, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                <div
+                  key={idx}
+                  className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-stretch sm:items-center p-2.5 sm:p-0 rounded-lg sm:rounded-none bg-white sm:bg-transparent border sm:border-0 border-border/70"
+                >
                   <select
-                    className="input col-span-5 text-xs py-2 bg-white"
+                    className="input-sm sm:col-span-5 bg-white"
                     value={part.method}
                     onChange={(e) =>
                       setSplitParts((prev) =>
@@ -784,45 +787,48 @@ export function UgandaCheckoutModal({
                       </option>
                     ))}
                   </select>
-                  <input
-                    type="number"
-                    min={0}
-                    className="input col-span-4 text-xs py-2 bg-white font-mono tabular-nums"
-                    value={part.amount || ''}
-                    placeholder="0"
-                    onChange={(e) =>
-                      setSplitParts((prev) =>
-                        prev.map((p, i) =>
-                          i === idx ? { ...p, amount: Math.max(0, Number(e.target.value) || 0) } : p
+                  <div className="flex items-center gap-2 sm:contents">
+                    <input
+                      type="number"
+                      min={0}
+                      className="input-sm flex-1 sm:col-span-4 bg-white font-mono tabular-nums"
+                      value={part.amount || ''}
+                      placeholder="0"
+                      onChange={(e) =>
+                        setSplitParts((prev) =>
+                          prev.map((p, i) =>
+                            i === idx ? { ...p, amount: Math.max(0, Number(e.target.value) || 0) } : p
+                          )
                         )
-                      )
-                    }
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const otherSum = splitParts.reduce(
-                        (sum, p, i) => (i === idx ? sum : sum + (Number(p.amount) || 0)),
-                        0
-                      );
-                      const needed = Math.max(0, total - otherSum);
-                      setSplitParts((prev) =>
-                        prev.map((p, i) => (i === idx ? { ...p, amount: needed } : p))
-                      );
-                    }}
-                    className="col-span-2 text-[11px] font-bold text-accent hover:underline whitespace-nowrap"
-                  >
-                    Fill
-                  </button>
-                  {splitParts.length > 2 && (
+                      }
+                    />
                     <button
                       type="button"
-                      onClick={() => setSplitParts((prev) => prev.filter((_, i) => i !== idx))}
-                      className="col-span-1 text-text-muted hover:text-danger"
+                      onClick={() => {
+                        const otherSum = splitParts.reduce(
+                          (sum, p, i) => (i === idx ? sum : sum + (Number(p.amount) || 0)),
+                          0
+                        );
+                        const needed = Math.max(0, total - otherSum);
+                        setSplitParts((prev) =>
+                          prev.map((p, i) => (i === idx ? { ...p, amount: needed } : p))
+                        );
+                      }}
+                      className="sm:col-span-2 px-2.5 py-2 text-[11px] font-bold text-accent hover:underline whitespace-nowrap shrink-0 min-h-[36px]"
                     >
-                      <X size={15} />
+                      Fill
                     </button>
-                  )}
+                    {splitParts.length > 2 && (
+                      <button
+                        type="button"
+                        aria-label={`Remove split tender ${idx + 1}`}
+                        onClick={() => setSplitParts((prev) => prev.filter((_, i) => i !== idx))}
+                        className="sm:col-span-1 p-2 text-text-muted hover:text-danger shrink-0 min-h-[36px] min-w-[36px] flex items-center justify-center"
+                      >
+                        <X size={15} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
 

@@ -18,13 +18,17 @@ import {
 } from 'lucide-react';
 import { useCustomers } from '../../hooks/useCustomers';
 import { useCreditPayments } from '../../hooks/useCreditPayments';
+import { usePOS } from '../../hooks/usePOS';
 import { useAuthStore } from '../../store/authStore';
 import { generateDebtReminder } from '../../services/aiService';
+import { AiLanguage, computeCustomerRiskAndSegments } from '../../utils/aiAnalytics';
 import { buildDebtWhatsAppUrl } from '../../utils/whatsapp';
 import { formatUGX, formatDate } from '../../utils/format';
 import { downloadCsv } from '../../utils/exportCsv';
 import { cn } from '../../lib/utils';
 import { Customer } from '../../types';
+import { SmartImportModal } from '../../components/shared/SmartImportModal';
+import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import toast from 'react-hot-toast';
 
 const REPAYMENT_METHODS = ['Cash', 'MTN Mobile Money', 'Airtel Money', 'Bank Transfer', 'Card'];
@@ -32,12 +36,15 @@ const REPAYMENT_METHODS = ['Cash', 'MTN Mobile Money', 'Airtel Money', 'Bank Tra
 export default function Customers() {
   const { user, tenant } = useAuthStore();
   const isAdmin = user?.role === 'admin';
-  const { customers, isLoading, addCustomer, updateCustomer, deleteCustomer } = useCustomers();
+  const { customers, isLoading, addCustomer, bulkImportCustomers, updateCustomer, deleteCustomer } =
+    useCustomers();
   const { payments, recordCustomerRepayment } = useCreditPayments();
+  const { sales } = usePOS();
   const [search, setSearch] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [typeFilter, setTypeFilter] = useState<'All' | Customer['type']>('All');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [repayCustomer, setRepayCustomer] = useState<Customer | null>(null);
   const [repayAmount, setRepayAmount] = useState('');
@@ -46,6 +53,7 @@ export default function Customers() {
   const [isRepaying, setIsRepaying] = useState(false);
   const [reminderCustomer, setReminderCustomer] = useState<Customer | null>(null);
   const [reminderTone, setReminderTone] = useState<'friendly' | 'firm' | 'final'>('friendly');
+  const [reminderLanguage, setReminderLanguage] = useState<AiLanguage>('en');
   const [reminderMessage, setReminderMessage] = useState('');
   const [isGeneratingReminder, setIsGeneratingReminder] = useState(false);
   const [formState, setFormState] = useState<{
@@ -63,6 +71,15 @@ export default function Customers() {
     type: 'Individual',
     creditLimit: 0,
   });
+
+  const customerRiskMap = useMemo(() => {
+    const list = computeCustomerRiskAndSegments({
+      customers,
+      sales,
+      creditPayments: payments,
+    });
+    return new Map(list.map((item) => [item.customerId, item]));
+  }, [customers, sales, payments]);
 
   const filteredCustomers = useMemo(() => {
     return customers.filter((c) => {
@@ -150,7 +167,8 @@ export default function Customers() {
 
   const fetchReminderDraft = async (
     customer: Customer,
-    tone: 'friendly' | 'firm' | 'final'
+    tone: 'friendly' | 'firm' | 'final',
+    lang: AiLanguage = reminderLanguage
   ) => {
     setIsGeneratingReminder(true);
     try {
@@ -159,6 +177,7 @@ export default function Customers() {
         amountOwedUgx: customer.currentBalance,
         businessName: tenant?.name || 'Our Business',
         tone,
+        language: lang,
       });
       setReminderMessage(res.message);
     } catch (error: any) {
@@ -174,10 +193,12 @@ export default function Customers() {
   };
 
   const openDebtReminderModal = (customer: Customer) => {
+    const risk = customerRiskMap.get(customer.id);
+    const initialTone = risk?.suggestedTone || 'friendly';
     setReminderCustomer(customer);
-    setReminderTone('friendly');
+    setReminderTone(initialTone);
     setReminderMessage('');
-    void fetchReminderDraft(customer, 'friendly');
+    void fetchReminderDraft(customer, initialTone, reminderLanguage);
   };
 
   const handleExport = () => {
@@ -208,7 +229,7 @@ export default function Customers() {
           <h1 className="text-3xl font-bold text-primary">Customers</h1>
           <p className="text-text-muted mt-1">Manage your customer relationships and credit.</p>
         </div>
-        <div className="flex gap-3 w-full sm:w-auto">
+        <div className="flex flex-wrap gap-2.5 w-full sm:w-auto">
           <button
             type="button"
             onClick={handleExport}
@@ -216,6 +237,14 @@ export default function Customers() {
           >
             <Download size={18} />
             Export
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsImportOpen(true)}
+            className="btn btn-secondary gap-2 flex-1 sm:flex-none whitespace-nowrap"
+          >
+            <Sparkles size={16} className="text-accent" />
+            Smart Import
           </button>
           <button
             type="button"
@@ -313,7 +342,7 @@ export default function Customers() {
           )}
         </div>
 
-        <div className="overflow-x-auto hidden sm:block">
+        <div className="overflow-x-auto hidden md:block">
           <table className="w-full text-left border-collapse min-w-[800px]">
             <thead>
               <tr className="bg-surface-alt/50 border-b border-border">
@@ -329,11 +358,7 @@ export default function Customers() {
             </thead>
             <tbody className="divide-y divide-border">
               {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
-                    <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-                  </td>
-                </tr>
+                <TableRowsSkeleton rows={6} columns={6} withAvatar />
               ) : filteredCustomers.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-text-muted">
@@ -372,6 +397,22 @@ export default function Customers() {
                       >
                         {formatUGX(customer.currentBalance)}
                       </p>
+                      {customer.currentBalance > 0 && customerRiskMap.get(customer.id) && (
+                        <p
+                          title={customerRiskMap.get(customer.id)!.reason}
+                          className={cn(
+                            'text-[11px] font-bold uppercase mt-0.5',
+                            customerRiskMap.get(customer.id)!.riskTier === 'high'
+                              ? 'text-danger'
+                              : customerRiskMap.get(customer.id)!.riskTier === 'watch'
+                              ? 'text-accent-alt'
+                              : 'text-text-muted'
+                          )}
+                        >
+                          {customerRiskMap.get(customer.id)!.riskTier} risk (
+                          {customerRiskMap.get(customer.id)!.riskScore})
+                        </p>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <p className="text-sm font-bold text-primary font-mono tabular-nums">
@@ -429,11 +470,9 @@ export default function Customers() {
         </div>
 
         {/* Mobile List View */}
-        <div className="sm:hidden divide-y divide-border">
+        <div className="md:hidden divide-y divide-border">
           {isLoading ? (
-            <div className="p-12 text-center">
-              <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-            </div>
+            <MobileListSkeleton cards={5} />
           ) : filteredCustomers.length === 0 ? (
             <div className="p-12 text-center text-text-muted">No customers found</div>
           ) : (
@@ -516,8 +555,8 @@ export default function Customers() {
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-xl font-bold text-white">
                 {editingCustomer ? 'Edit Customer' : 'Add New Customer'}
               </h3>
@@ -529,7 +568,7 @@ export default function Customers() {
                 <X size={24} />
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-sm font-bold text-primary mb-1">Full Name *</label>
                 <input
@@ -607,8 +646,8 @@ export default function Customers() {
       {/* Record Customer Credit Repayment Modal */}
       {repayCustomer && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white">Record Credit Repayment</h3>
                 <p className="text-xs text-white/75">{repayCustomer.name}</p>
@@ -621,7 +660,7 @@ export default function Customers() {
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleRepaySubmit} className="p-6 space-y-4">
+            <form onSubmit={handleRepaySubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="p-3.5 rounded-xl bg-surface-alt border border-border flex items-center justify-between">
                 <span className="text-xs font-bold text-text-muted uppercase">Outstanding Debt</span>
                 <span className="text-lg font-bold text-danger font-mono tabular-nums">
@@ -644,7 +683,7 @@ export default function Customers() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-bold text-primary mb-1">Method</label>
                   <select
@@ -711,8 +750,8 @@ export default function Customers() {
       {/* AI Debt Reminder Modal */}
       {reminderCustomer && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div className="flex items-center gap-2.5">
                 <Sparkles size={20} className="text-accent" />
                 <div>
@@ -731,31 +770,53 @@ export default function Customers() {
                 <X size={20} />
               </button>
             </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">
-                  Reminder Tone
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['friendly', 'firm', 'final'] as const).map((tone) => (
-                    <button
-                      key={tone}
-                      type="button"
-                      disabled={isGeneratingReminder}
-                      onClick={() => {
-                        setReminderTone(tone);
-                        void fetchReminderDraft(reminderCustomer, tone);
-                      }}
-                      className={cn(
-                        'py-2 px-3 rounded-lg text-xs font-bold capitalize border transition-colors',
-                        reminderTone === tone
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-surface-alt text-text-secondary border-border hover:border-primary'
-                      )}
-                    >
-                      {tone}
-                    </button>
-                  ))}
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1.5">
+                    Reminder Tone
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(['friendly', 'firm', 'final'] as const).map((tone) => (
+                      <button
+                        key={tone}
+                        type="button"
+                        disabled={isGeneratingReminder}
+                        onClick={() => {
+                          setReminderTone(tone);
+                          void fetchReminderDraft(reminderCustomer, tone, reminderLanguage);
+                        }}
+                        className={cn(
+                          'py-2 px-2 rounded-lg text-xs font-bold capitalize border transition-colors',
+                          reminderTone === tone
+                            ? 'bg-primary text-white border-primary'
+                            : 'bg-surface-alt text-text-secondary border-border hover:border-primary'
+                        )}
+                      >
+                        {tone}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1.5">
+                    Language
+                  </label>
+                  <select
+                    aria-label="Debt reminder language"
+                    disabled={isGeneratingReminder}
+                    value={reminderLanguage}
+                    onChange={(e) => {
+                      const nextLang = e.target.value as AiLanguage;
+                      setReminderLanguage(nextLang);
+                      void fetchReminderDraft(reminderCustomer, reminderTone, nextLang);
+                    }}
+                    className="input py-1.5 text-xs w-full"
+                  >
+                    <option value="en">English</option>
+                    <option value="lg">Luganda</option>
+                    <option value="sw">Kiswahili</option>
+                  </select>
                 </div>
               </div>
 
@@ -805,6 +866,27 @@ export default function Customers() {
           </div>
         </div>
       )}
+
+      <SmartImportModal
+        isOpen={isImportOpen}
+        entityType="customers"
+        onClose={() => setIsImportOpen(false)}
+        existingEmails={customers.map((c) => c.email || '').filter(Boolean)}
+        onCommit={async (rows) => {
+          return bulkImportCustomers(
+            rows.map((r) => ({
+              name: String(r.name || ''),
+              phone: String(r.phone || ''),
+              email: r.email ? String(r.email) : undefined,
+              address: r.address ? String(r.address) : undefined,
+              type: r.type,
+              creditLimit: Number(r.creditLimit) || 0,
+              currentBalance: Number(r.currentBalance) || 0,
+              loyaltyPoints: Number(r.loyaltyPoints) || 0,
+            }))
+          );
+        }}
+      />
     </div>
   );
 }

@@ -16,6 +16,8 @@ import {
 import { useExpenses } from '../../hooks/useExpenses';
 import { useAuthStore } from '../../store/authStore';
 import { scanDocumentImage, fileToBase64 } from '../../services/aiService';
+import { SmartImportModal } from '../../components/shared/SmartImportModal';
+import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import { formatUGX, formatDate } from '../../utils/format';
 import { downloadCsv } from '../../utils/exportCsv';
 import toast from 'react-hot-toast';
@@ -35,12 +37,13 @@ const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Bank Transfer', 'Credit Card']
 export default function Expenses() {
   const { user, activeBranchId } = useAuthStore();
   const isAdmin = user?.role === 'admin';
-  const { expenses, isLoading, addExpense, deleteExpense } = useExpenses();
+  const { expenses, isLoading, addExpense, deleteExpense, bulkImportExpenses } = useExpenses();
   const [search, setSearch] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [methodFilter, setMethodFilter] = useState('All');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isScanningReceipt, setIsScanningReceipt] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -191,7 +194,7 @@ export default function Expenses() {
           <h1 className="text-3xl font-bold text-primary">Expenses</h1>
           <p className="text-text-muted mt-1">Track your business spending and overheads.</p>
         </div>
-        <div className="flex gap-3 w-full sm:w-auto">
+        <div className="flex flex-wrap gap-2.5 w-full sm:w-auto">
           <button
             type="button"
             onClick={handleExportCsv}
@@ -199,6 +202,14 @@ export default function Expenses() {
           >
             <Download size={18} />
             Export
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsImportOpen(true)}
+            className="btn btn-secondary gap-2 flex-1 sm:flex-none whitespace-nowrap"
+          >
+            <Sparkles size={17} className="text-accent" />
+            Smart Import
           </button>
           <button
             type="button"
@@ -316,7 +327,7 @@ export default function Expenses() {
           )}
         </div>
 
-        <div className="overflow-x-auto hidden sm:block">
+        <div className="overflow-x-auto hidden md:block">
           <table className="w-full text-left border-collapse min-w-[800px]">
             <thead>
               <tr className="bg-surface-alt/50 border-b border-border">
@@ -330,11 +341,7 @@ export default function Expenses() {
             </thead>
             <tbody className="divide-y divide-border">
               {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
-                    <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-                  </td>
-                </tr>
+                <TableRowsSkeleton rows={6} columns={6} />
               ) : filteredExpenses.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-text-muted">
@@ -402,11 +409,9 @@ export default function Expenses() {
         </div>
 
         {/* Mobile List View */}
-        <div className="sm:hidden divide-y divide-border">
+        <div className="md:hidden divide-y divide-border">
           {isLoading ? (
-            <div className="p-12 text-center">
-              <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-            </div>
+            <MobileListSkeleton cards={5} />
           ) : filteredExpenses.length === 0 ? (
             <div className="p-12 text-center text-text-muted">
               {expenses.length === 0 ? 'No expenses recorded yet' : 'No matching expenses found'}
@@ -470,8 +475,8 @@ export default function Expenses() {
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div className="flex items-center gap-3">
                 <ArrowDownCircle size={24} />
                 <h3 className="text-xl font-bold text-white">Record Expense</h3>
@@ -485,7 +490,7 @@ export default function Expenses() {
                 <X size={24} />
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="p-3.5 rounded-xl bg-accent/10 border border-accent/25 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-xs font-bold text-primary flex items-center gap-1.5">
@@ -596,6 +601,23 @@ export default function Expenses() {
           </div>
         </div>
       )}
+
+      <SmartImportModal
+        isOpen={isImportOpen}
+        entityType="expenses"
+        onClose={() => setIsImportOpen(false)}
+        onCommit={(rows) =>
+          bulkImportExpenses(
+            rows.map((r) => ({
+              expenseDate: r.expenseDate ? String(r.expenseDate) : undefined,
+              category: r.category ? String(r.category) : 'General',
+              description: String(r.description || ''),
+              amount: Number(r.amount) || 0,
+              paymentMethod: r.paymentMethod ? String(r.paymentMethod) : 'Cash',
+            }))
+          )
+        }
+      />
     </div>
   );
 }

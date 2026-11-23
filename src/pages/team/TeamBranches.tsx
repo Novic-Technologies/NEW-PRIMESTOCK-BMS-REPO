@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   MapPin,
   UsersRound,
@@ -14,18 +15,24 @@ import {
   AlertCircle,
   Loader2,
   KeyRound,
+  Lock,
+  Pencil,
 } from 'lucide-react';
 import { useBranches } from '../../hooks/useBranches';
 import { useTeam } from '../../hooks/useTeam';
 import { useAuthStore } from '../../store/authStore';
 import { formatDate } from '../../utils/format';
+import { getEffectivePlanQuota, isQuotaExceeded } from '../../utils/planLimits';
 import {
   ALL_SECTIONS,
   getDefaultSectionsForRole,
   getUserAllowedSections,
+  hashStaffPin,
+  isValidPinFormat,
   ROLE_META,
 } from '../../utils/rbac';
 import { AppSection, BusinessRole, TenantMember } from '../../types';
+import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import { cn } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
@@ -38,8 +45,8 @@ const ASSIGNABLE_ROLES: BusinessRole[] = [
 ];
 
 export default function TeamBranches() {
-  const { user } = useAuthStore();
-  const { branches, activeBranchId, setActiveBranchId, addBranch, deleteBranch } = useBranches();
+  const { tenant, user } = useAuthStore();
+  const { branches, activeBranchId, setActiveBranchId, addBranch, updateBranch, deleteBranch } = useBranches();
   const {
     members,
     invites,
@@ -48,9 +55,11 @@ export default function TeamBranches() {
     createStaffAccount,
     revokeInvite,
     updateMember,
+    removeInactiveMember,
   } = useTeam();
 
   const [isBranchModalOpen, setIsBranchModalOpen] = useState(false);
+  const [editingBranchId, setEditingBranchId] = useState<string | null>(null);
   const [branchForm, setBranchForm] = useState({ name: '', location: '', phone: '' });
 
   // Staff Add Modal (Create Account directly OR Send Invite Link)
@@ -63,6 +72,7 @@ export default function TeamBranches() {
     name: string;
     email: string;
     password: string;
+    posPin: string;
     role: BusinessRole;
     branchId: string;
     allowedSections: AppSection[];
@@ -70,6 +80,7 @@ export default function TeamBranches() {
     name: '',
     email: '',
     password: '',
+    posPin: '',
     role: 'cashier',
     branchId: activeBranchId && activeBranchId !== 'ALL' ? activeBranchId : '',
     allowedSections: getDefaultSectionsForRole('cashier'),
@@ -80,16 +91,36 @@ export default function TeamBranches() {
   const [editingSections, setEditingSections] = useState<AppSection[]>([]);
   const [isSavingAccess, setIsSavingAccess] = useState(false);
 
+  // Member 4-Digit POS PIN Modal & Remove Inactive Confirmation Modal
+  const [editingPinMember, setEditingPinMember] = useState<TenantMember | null>(null);
+  const [pinInput, setPinInput] = useState('');
+  const [isSavingPin, setIsSavingPin] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<TenantMember | null>(null);
+  const [isRemovingMember, setIsRemovingMember] = useState(false);
+
   const isAdmin = user?.role === 'admin';
   const isManagerOrAdmin = user?.role === 'admin' || user?.role === 'manager';
+  const planQuota = getEffectivePlanQuota(tenant);
+  const activeSeatCount =
+    members.filter((m) => m.status === 'active').length +
+    invites.filter((i) => i.status === 'pending').length;
+  const seatLimitReached = isQuotaExceeded(activeSeatCount, planQuota.maxUsers);
+  const branchLimitReached = isQuotaExceeded(branches.length, planQuota.maxBranches);
 
   const openStaffModal = () => {
+    if (seatLimitReached) {
+      toast.error(
+        `${planQuota.name} plan allows up to ${planQuota.maxUsers} staff users. Upgrade in Billing to add more.`
+      );
+      return;
+    }
     setStaffFormError(null);
     setShowStaffPassword(false);
     setStaffForm({
       name: '',
       email: '',
       password: '',
+      posPin: '',
       role: 'cashier',
       branchId: activeBranchId && activeBranchId !== 'ALL' ? activeBranchId : '',
       allowedSections: getDefaultSectionsForRole('cashier'),
@@ -121,8 +152,49 @@ export default function TeamBranches() {
     });
   };
 
-  const handleCreateBranch = async (e: React.FormEvent) => {
+  const openAddBranchModal = () => {
+    if (branchLimitReached) {
+      toast.error(
+        `${planQuota.name} plan allows up to ${planQuota.maxBranches} branch${
+          planQuota.maxBranches === 1 ? '' : 'es'
+        }. Upgrade in Billing.`
+      );
+      return;
+    }
+    setEditingBranchId(null);
+    setBranchForm({ name: '', location: '', phone: '' });
+    setIsBranchModalOpen(true);
+  };
+
+  const openEditBranchModal = (branch: (typeof branches)[number]) => {
+    setEditingBranchId(branch.id);
+    setBranchForm({
+      name: branch.name,
+      location: branch.location,
+      phone: branch.phone || '',
+    });
+    setIsBranchModalOpen(true);
+  };
+
+  const handleSaveBranch = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!branchForm.name.trim() || !branchForm.location.trim()) {
+      toast.error('Branch name and location are required');
+      return;
+    }
+    if (editingBranchId) {
+      const updated = await updateBranch(editingBranchId, {
+        name: branchForm.name.trim(),
+        location: branchForm.location.trim(),
+        phone: branchForm.phone.trim() || undefined,
+      });
+      if (updated) {
+        setIsBranchModalOpen(false);
+        setEditingBranchId(null);
+        setBranchForm({ name: '', location: '', phone: '' });
+      }
+      return;
+    }
     const created = await addBranch(branchForm);
     if (created) {
       setIsBranchModalOpen(false);
@@ -134,6 +206,10 @@ export default function TeamBranches() {
     e.preventDefault();
     if (isSubmittingStaff) return;
     setStaffFormError(null);
+    if (staffMode === 'create' && staffForm.posPin.trim() && !isValidPinFormat(staffForm.posPin)) {
+      setStaffFormError('POS Quick-Switch PIN must be exactly 4 digits (e.g. 1234).');
+      return;
+    }
     setIsSubmittingStaff(true);
 
     try {
@@ -143,6 +219,7 @@ export default function TeamBranches() {
               name: staffForm.name,
               email: staffForm.email,
               password: staffForm.password,
+              posPin: staffForm.posPin.trim() || undefined,
               role: staffForm.role,
               allowedSections: staffForm.allowedSections,
               branchId: staffForm.branchId || undefined,
@@ -162,6 +239,48 @@ export default function TeamBranches() {
       }
     } finally {
       setIsSubmittingStaff(false);
+    }
+  };
+
+  const handleSaveMemberPin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPinMember || !tenant || isSavingPin) return;
+    const cleanPin = pinInput.trim();
+    if (!isValidPinFormat(cleanPin)) {
+      toast.error('Enter exactly 4 numeric digits (e.g. 2468)');
+      return;
+    }
+    setIsSavingPin(true);
+    try {
+      const hash = await hashStaffPin(tenant.id, editingPinMember.uid, cleanPin);
+      await updateMember(editingPinMember.uid, { posPinHash: hash });
+      setEditingPinMember(null);
+      setPinInput('');
+    } finally {
+      setIsSavingPin(false);
+    }
+  };
+
+  const handleClearMemberPin = async () => {
+    if (!editingPinMember || isSavingPin) return;
+    setIsSavingPin(true);
+    try {
+      await updateMember(editingPinMember.uid, { posPinHash: null });
+      setEditingPinMember(null);
+      setPinInput('');
+    } finally {
+      setIsSavingPin(false);
+    }
+  };
+
+  const handleConfirmRemoveInactive = async () => {
+    if (!removeTarget || isRemovingMember) return;
+    setIsRemovingMember(true);
+    try {
+      const ok = await removeInactiveMember(removeTarget.uid);
+      if (ok) setRemoveTarget(null);
+    } finally {
+      setIsRemovingMember(false);
     }
   };
 
@@ -219,10 +338,10 @@ export default function TeamBranches() {
           {isManagerOrAdmin && (
             <button
               type="button"
-              onClick={() => setIsBranchModalOpen(true)}
-              className="btn btn-secondary gap-2 whitespace-nowrap"
+              onClick={openAddBranchModal}
+              className={cn('btn btn-secondary gap-2 whitespace-nowrap', branchLimitReached && 'opacity-70')}
             >
-              <Plus size={18} />
+              {branchLimitReached ? <Lock size={16} /> : <Plus size={18} />}
               Add Branch
             </button>
           )}
@@ -230,21 +349,39 @@ export default function TeamBranches() {
             <button
               type="button"
               onClick={openStaffModal}
-              className="btn btn-primary gap-2 whitespace-nowrap"
+              className={cn('btn btn-primary gap-2 whitespace-nowrap', seatLimitReached && 'opacity-70')}
             >
-              <UserPlus size={18} />
+              {seatLimitReached ? <Lock size={16} /> : <UserPlus size={18} />}
               Add Staff Account
             </button>
           )}
         </div>
       </div>
 
+      {(seatLimitReached || branchLimitReached) && isAdmin && (
+        <div className="p-3.5 rounded-xl bg-accent-alt/10 border border-accent-alt/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+          <span className="text-primary font-medium">
+            {seatLimitReached && branchLimitReached
+              ? `Both staff seat (${activeSeatCount}/${planQuota.maxUsers}) and branch (${branches.length}/${planQuota.maxBranches}) quotas are full on ${planQuota.name}.`
+              : seatLimitReached
+              ? `Staff seat quota reached (${activeSeatCount}/${planQuota.maxUsers}) on ${planQuota.name}.`
+              : `Branch quota reached (${branches.length}/${planQuota.maxBranches}) on ${planQuota.name}.`}
+          </span>
+          <Link to="/billing" className="font-bold text-accent hover:underline whitespace-nowrap">
+            Upgrade in Billing →
+          </Link>
+        </div>
+      )}
+
       {/* Branches Section */}
       <div className="space-y-4">
-        <h2 className="text-lg font-bold text-primary flex items-center gap-2">
-          <MapPin size={20} className="text-accent" />
-          Business Branches ({branches.length})
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-bold text-primary flex items-center gap-2">
+            <MapPin size={20} className="text-accent" />
+            Business Branches ({branches.length} / {Number.isFinite(planQuota.maxBranches) ? planQuota.maxBranches : '∞'})
+          </h2>
+          <span className="text-xs font-medium text-text-muted">{planQuota.name} Tier Limit</span>
+        </div>
         {branches.length === 0 ? (
           <div className="card text-center py-8 text-text-muted text-sm">
             No branches configured yet. Add your primary store or warehouse branch.
@@ -292,16 +429,28 @@ export default function TeamBranches() {
                       {isCurrent ? 'Active Branch' : 'Switch to Branch'}
                     </button>
 
-                    {isAdmin && !branch.isDefault && (
-                      <button
-                        type="button"
-                        onClick={() => deleteBranch(branch.id)}
-                        aria-label={`Delete ${branch.name}`}
-                        className="p-1.5 text-text-muted hover:text-danger rounded"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {isManagerOrAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => openEditBranchModal(branch)}
+                          aria-label={`Edit ${branch.name}`}
+                          className="p-1.5 text-text-muted hover:text-primary rounded"
+                        >
+                          <Pencil size={15} />
+                        </button>
+                      )}
+                      {isAdmin && !branch.isDefault && (
+                        <button
+                          type="button"
+                          onClick={() => deleteBranch(branch.id)}
+                          aria-label={`Delete ${branch.name}`}
+                          className="p-1.5 text-text-muted hover:text-danger rounded"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -312,17 +461,183 @@ export default function TeamBranches() {
 
       {/* Active Team Members */}
       <div className="card p-0 overflow-hidden">
-        <div className="p-5 border-b border-border flex items-center justify-between bg-surface-alt/50">
+        <div className="p-5 border-b border-border flex flex-wrap items-center justify-between gap-2 bg-surface-alt/50">
           <div className="flex items-center gap-2">
             <UsersRound size={20} className="text-primary" />
-            <h2 className="font-bold text-primary">Team Members ({members.length})</h2>
+            <h2 className="font-bold text-primary">
+              Team Members ({activeSeatCount} / {Number.isFinite(planQuota.maxUsers) ? planQuota.maxUsers : '∞'} active seats)
+            </h2>
           </div>
           <span className="text-xs text-text-muted hidden sm:inline">
             Each staff account uses an isolated email and strict role permissions.
           </span>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="md:hidden divide-y divide-border">
+          {isLoading ? (
+            <MobileListSkeleton cards={4} />
+          ) : members.length === 0 ? (
+            <div className="px-4 py-10 text-center text-sm text-text-muted">
+              No team members found
+            </div>
+          ) : (
+            members.map((member) => {
+              const isSelf = member.uid === user?.uid;
+              const effectiveSections =
+                member.role === 'admin'
+                  ? ['All Sections']
+                  : (member.allowedSections?.length
+                      ? member.allowedSections
+                      : getDefaultSectionsForRole(member.role)
+                    ).map((id) => ALL_SECTIONS.find((s) => s.id === id)?.label || id);
+
+              return (
+                <div key={member.uid} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-bold text-primary truncate">
+                        {member.name} {isSelf && <span className="text-xs text-accent">(You)</span>}
+                      </p>
+                      <p className="text-xs text-text-muted truncate">{member.email}</p>
+                    </div>
+                    {isAdmin && !isSelf ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateMember(member.uid, {
+                              status: member.status === 'active' ? 'inactive' : 'active',
+                            })
+                          }
+                          className={cn(
+                            'text-xs font-bold uppercase px-2 py-1 rounded border',
+                            member.status === 'active'
+                              ? 'text-accent border-accent/25 bg-accent/10'
+                              : 'text-danger border-danger/25 bg-danger/10'
+                          )}
+                        >
+                          {member.status}
+                        </button>
+                        {member.status === 'inactive' && (
+                          <button
+                            type="button"
+                            onClick={() => setRemoveTarget(member)}
+                            className="p-1.5 text-danger hover:bg-danger/10 rounded-lg"
+                            aria-label={`Remove ${member.name}`}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs font-bold uppercase text-accent shrink-0">
+                        {member.status}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase text-text-muted mb-1">
+                        Role
+                      </label>
+                      {isAdmin && !isSelf ? (
+                        <select
+                          aria-label={`Mobile role for ${member.name}`}
+                          className="input-sm w-full"
+                          value={member.role}
+                          onChange={(e) =>
+                            updateMember(member.uid, {
+                              role: e.target.value as BusinessRole,
+                            })
+                          }
+                        >
+                          {ASSIGNABLE_ROLES.map((r) => (
+                            <option key={r} value={r}>
+                              {ROLE_META[r].label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p className="font-bold uppercase text-primary py-1">
+                          {ROLE_META[member.role]?.label || member.role}
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase text-text-muted mb-1">
+                        Assigned Branch
+                      </label>
+                      {isAdmin ? (
+                        <select
+                          aria-label={`Mobile branch for ${member.name}`}
+                          className="input-sm w-full"
+                          value={member.branchId || ''}
+                          onChange={(e) =>
+                            updateMember(member.uid, { branchId: e.target.value || undefined })
+                          }
+                        >
+                          <option value="">All Branches</option>
+                          {branches.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p className="text-text-secondary py-1">
+                          {branches.find((b) => b.id === member.branchId)?.name || 'All Branches'}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-surface-alt/50 border border-border/60 flex items-center justify-between gap-2 text-xs">
+                    <span className="text-text-secondary truncate">
+                      {member.role === 'admin'
+                        ? 'Full Access (All)'
+                        : effectiveSections.join(', ')}
+                    </span>
+                    {isAdmin && !isSelf && member.role !== 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => openAccessEditor(member)}
+                        className="inline-flex items-center gap-1 font-bold text-accent hover:underline whitespace-nowrap shrink-0"
+                      >
+                        <Shield size={12} />
+                        Edit
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 text-xs text-text-muted">
+                    <span>Joined {formatDate(member.createdAt)}</span>
+                    {isAdmin ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingPinMember(member);
+                          setPinInput('');
+                        }}
+                        className={cn(
+                          'inline-flex items-center gap-1 font-bold whitespace-nowrap hover:underline',
+                          member.posPinHash ? 'text-accent' : 'text-text-secondary'
+                        )}
+                      >
+                        <Lock size={12} />
+                        {member.posPinHash ? 'PIN Set (Change)' : 'Set 4-Digit PIN'}
+                      </button>
+                    ) : (
+                      <span>{member.posPinHash ? 'PIN Configured' : '—'}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[880px]">
             <thead>
               <tr className="bg-surface-alt/50 border-b border-border text-xs font-bold text-text-muted uppercase tracking-wider">
@@ -330,20 +645,17 @@ export default function TeamBranches() {
                 <th className="px-6 py-4">Role</th>
                 <th className="px-6 py-4">Visible Sections</th>
                 <th className="px-6 py-4">Assigned Branch</th>
-                <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4">Status &amp; Actions</th>
+                <th className="px-6 py-4">POS PIN</th>
                 <th className="px-6 py-4">Joined</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border text-sm">
               {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-10 text-center">
-                    <div className="w-7 h-7 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-                  </td>
-                </tr>
+                <TableRowsSkeleton rows={5} columns={7} />
               ) : members.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-10 text-center text-text-muted">
+                  <td colSpan={7} className="px-6 py-10 text-center text-text-muted">
                     No team members found
                   </td>
                 </tr>
@@ -370,7 +682,7 @@ export default function TeamBranches() {
                         {isAdmin && !isSelf ? (
                           <select
                             aria-label={`Role for ${member.name}`}
-                            className="input py-1.5 min-h-[36px] text-xs w-44"
+                            className="input-sm w-44"
                             value={member.role}
                             onChange={(e) =>
                               updateMember(member.uid, {
@@ -416,7 +728,7 @@ export default function TeamBranches() {
                         {isAdmin ? (
                           <select
                             aria-label={`Branch for ${member.name}`}
-                            className="input py-1.5 min-h-[36px] text-xs w-40"
+                            className="input-sm w-40"
                             value={member.branchId || ''}
                             onChange={(e) =>
                               updateMember(member.uid, { branchId: e.target.value || undefined })
@@ -437,27 +749,62 @@ export default function TeamBranches() {
                       </td>
                       <td className="px-6 py-4">
                         {isAdmin && !isSelf ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateMember(member.uid, {
-                                status: member.status === 'active' ? 'inactive' : 'active',
-                              })
-                            }
-                            className={cn(
-                              'text-xs font-bold uppercase hover:underline',
-                              member.status === 'active' ? 'text-accent' : 'text-danger'
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateMember(member.uid, {
+                                  status: member.status === 'active' ? 'inactive' : 'active',
+                                })
+                              }
+                              className={cn(
+                                'text-xs font-bold uppercase hover:underline',
+                                member.status === 'active' ? 'text-accent' : 'text-danger'
+                              )}
+                            >
+                              {member.status}
+                            </button>
+                            {member.status === 'inactive' && (
+                              <button
+                                type="button"
+                                onClick={() => setRemoveTarget(member)}
+                                className="inline-flex items-center gap-1 text-xs font-bold text-danger hover:underline whitespace-nowrap"
+                                title="Remove inactive staff member permanently"
+                              >
+                                <Trash2 size={13} />
+                                Remove
+                              </button>
                             )}
-                          >
-                            {member.status}
-                          </button>
+                          </div>
                         ) : (
                           <span className="text-xs font-bold uppercase text-accent">
                             {member.status}
                           </span>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-xs text-text-muted">
+                      <td className="px-6 py-4">
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingPinMember(member);
+                              setPinInput('');
+                            }}
+                            className={cn(
+                              'inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap hover:underline',
+                              member.posPinHash ? 'text-accent' : 'text-text-secondary'
+                            )}
+                          >
+                            <Lock size={12} />
+                            {member.posPinHash ? 'PIN Set (Change)' : 'Set 4-Digit PIN'}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-text-muted">
+                            {member.posPinHash ? 'Configured' : '—'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-xs text-text-muted whitespace-nowrap">
                         {formatDate(member.createdAt)}
                       </td>
                     </tr>
@@ -529,21 +876,27 @@ export default function TeamBranches() {
         </div>
       )}
 
-      {/* Add Branch Modal */}
+      {/* Add / Edit Branch Modal */}
       {isBranchModalOpen && (
-        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
-              <h3 className="text-lg font-bold text-white">Add Business Branch</h3>
+        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
+              <h3 className="text-lg font-bold text-white">
+                {editingBranchId ? 'Edit Business Branch' : 'Add Business Branch'}
+              </h3>
               <button
                 type="button"
-                onClick={() => setIsBranchModalOpen(false)}
+                onClick={() => {
+                  setIsBranchModalOpen(false);
+                  setEditingBranchId(null);
+                }}
                 className="p-1 hover:bg-white/10 rounded-lg"
+                aria-label="Close branch modal"
               >
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleCreateBranch} className="p-6 space-y-4">
+            <form onSubmit={handleSaveBranch} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-sm font-bold text-primary mb-1">Branch Name *</label>
                 <input
@@ -579,13 +932,16 @@ export default function TeamBranches() {
               <div className="pt-2 flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setIsBranchModalOpen(false)}
+                  onClick={() => {
+                    setIsBranchModalOpen(false);
+                    setEditingBranchId(null);
+                  }}
                   className="btn btn-secondary flex-1"
                 >
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary flex-1">
-                  Save Branch
+                  {editingBranchId ? 'Update Branch' : 'Save Branch'}
                 </button>
               </div>
             </form>
@@ -595,8 +951,8 @@ export default function TeamBranches() {
 
       {/* Create Staff Account / Send Invite Modal */}
       {isStaffModalOpen && (
-        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[92vh]">
+        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[92dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white">Add Business Staff Member</h3>
               <button
@@ -689,28 +1045,50 @@ export default function TeamBranches() {
               </div>
 
               {staffMode === 'create' && (
-                <div>
-                  <label className="block text-sm font-bold text-primary mb-1">
-                    Temporary Password *
-                  </label>
-                  <div className="relative">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-bold text-primary mb-1">
+                      Temporary Password *
+                    </label>
+                    <div className="relative">
+                      <input
+                        required
+                        minLength={6}
+                        type={showStaffPassword ? 'text' : 'password'}
+                        className="input w-full pr-11"
+                        placeholder="At least 6 characters"
+                        value={staffForm.password}
+                        onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowStaffPassword((p) => !p)}
+                        aria-label={showStaffPassword ? 'Hide password' : 'Show password'}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-text-muted hover:text-primary"
+                      >
+                        {showStaffPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-primary mb-1">
+                      POS Quick-Switch PIN (Optional)
+                    </label>
                     <input
-                      required
-                      minLength={6}
-                      type={showStaffPassword ? 'text' : 'password'}
-                      className="input w-full pr-11"
-                      placeholder="At least 6 characters"
-                      value={staffForm.password}
-                      onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })}
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={4}
+                      pattern="\d{4}"
+                      className="input w-full font-mono tracking-widest"
+                      placeholder="4 digits (e.g. 2468)"
+                      value={staffForm.posPin}
+                      onChange={(e) =>
+                        setStaffForm({
+                          ...staffForm,
+                          posPin: e.target.value.replace(/\D/g, '').slice(0, 4),
+                        })
+                      }
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowStaffPassword((p) => !p)}
-                      aria-label={showStaffPassword ? 'Hide password' : 'Show password'}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-text-muted hover:text-primary"
-                    >
-                      {showStaffPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                    </button>
                   </div>
                 </div>
               )}
@@ -824,9 +1202,9 @@ export default function TeamBranches() {
 
       {/* Customize Member Section Access Modal */}
       {editingAccessMember && (
-        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
+        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white">
                   Section Access · {editingAccessMember.name}
@@ -839,11 +1217,12 @@ export default function TeamBranches() {
                 type="button"
                 onClick={() => setEditingAccessMember(null)}
                 className="p-1 hover:bg-white/10 rounded-lg"
+                aria-label="Close section access modal"
               >
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleSaveMemberAccess} className="p-6 space-y-4">
+            <form onSubmit={handleSaveMemberAccess} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
               <p className="text-xs text-text-secondary">
                 Choose exactly which workspace sections this staff member can see and open. Changes apply live immediately.
               </p>
@@ -873,7 +1252,7 @@ export default function TeamBranches() {
                 })}
               </div>
 
-              <div className="flex items-center justify-between pt-2 border-t border-border">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border">
                 <button
                   type="button"
                   onClick={() =>
@@ -901,6 +1280,119 @@ export default function TeamBranches() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Set / Update 4-Digit POS PIN Modal */}
+      {editingPinMember && (
+        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
+              <div>
+                <h3 className="text-lg font-bold text-white">4-Digit POS PIN</h3>
+                <p className="text-xs text-white/75">{editingPinMember.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingPinMember(null)}
+                className="p-1 hover:bg-white/10 rounded-lg"
+                aria-label="Close PIN modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <form onSubmit={handleSaveMemberPin} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
+              <div>
+                <label className="block text-sm font-bold text-primary mb-1">
+                  Enter 4-Digit Counter PIN *
+                </label>
+                <input
+                  required
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  pattern="\d{4}"
+                  className="input w-full font-mono text-center text-xl tracking-[0.5em]"
+                  placeholder="••••"
+                  value={pinInput}
+                  onChange={(e) => setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  autoFocus
+                />
+                <p className="text-xs text-text-muted mt-1.5">
+                  Stored securely as a salted SHA-256 hash. Used to switch active cashier rapidly inside POS.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-2">
+                {editingPinMember.posPinHash && (
+                  <button
+                    type="button"
+                    disabled={isSavingPin}
+                    onClick={handleClearMemberPin}
+                    className="btn btn-secondary text-xs text-danger"
+                  >
+                    Clear PIN
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={isSavingPin}
+                  onClick={() => setEditingPinMember(null)}
+                  className="btn btn-secondary flex-1 text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingPin || pinInput.length !== 4}
+                  className="btn btn-primary flex-1 text-xs"
+                >
+                  {isSavingPin ? 'Saving...' : 'Save PIN'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Permanent Removal of Inactive Staff */}
+      {removeTarget && (
+        <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-danger/25 flex flex-col max-h-[90dvh]">
+            <div className="p-5 bg-danger text-white flex items-center justify-between shrink-0">
+              <h3 className="text-lg font-bold text-white">Remove Inactive Staff Member</h3>
+              <button
+                type="button"
+                disabled={isRemovingMember}
+                onClick={() => setRemoveTarget(null)}
+                className="p-1 hover:bg-white/15 rounded-lg"
+                aria-label="Close removal confirmation"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
+              <p className="text-sm text-text-secondary">
+                Permanently remove <strong className="text-primary">{removeTarget.name}</strong> ({removeTarget.email}) from your team directory and release their email lock &amp; seat? Historical receipts remain intact.
+              </p>
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  disabled={isRemovingMember}
+                  onClick={() => setRemoveTarget(null)}
+                  className="btn btn-secondary flex-1"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isRemovingMember}
+                  onClick={handleConfirmRemoveInactive}
+                  className="btn bg-danger text-white hover:bg-danger/90 flex-1 font-bold"
+                >
+                  {isRemovingMember ? 'Removing...' : 'Remove Staff'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -23,6 +23,7 @@ export function buildEscPosReceiptText(sale: Sale, tenant: Tenant, customer?: Cu
     '\x1B\x61\x00', // Left align
     `Receipt: ${sale.reference}\n`,
     `Date:    ${dateStr}\n`,
+    sale.cashierName ? `Cashier: ${sale.cashierName}\n` : '',
     customer ? `Client:  ${customer.name}\n` : '',
     `Method:  ${sale.paymentMethod}\n`,
     sale.paymentReference ? `Pay Ref: ${sale.paymentReference}\n` : '',

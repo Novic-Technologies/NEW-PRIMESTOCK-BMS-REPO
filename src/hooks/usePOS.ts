@@ -8,8 +8,10 @@ import { doc, setDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
+import { getTrialDaysCount } from '../utils/planLimits';
 import { applyBranchStockDelta, getEffectiveStock } from '../utils/branchStock';
 import { logWorkspaceAudit } from './useAuditLog';
+import { normalizeIsoDate, normalizeUgPhone } from '../utils/smartImportParser';
 import toast from 'react-hot-toast';
 
 export interface CartItem extends Product {
@@ -46,6 +48,7 @@ export function usePOS() {
   const [discount, setDiscount] = useState(0);
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [sales, setSales] = useState<Sale[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [heldCarts, setHeldCarts] = useState<HeldCart[]>([]);
   const [selectedCustomerType, setSelectedCustomerType] = useState<Customer['type'] | undefined>(undefined);
 
@@ -56,9 +59,11 @@ export function usePOS() {
     if (!tenant) {
       setSales([]);
       setHeldCarts([]);
+      setIsLoading(false);
       return;
     }
 
+    setIsLoading(true);
     const storageKey = `primestock_held_carts_${tenant.id}`;
     try {
       const saved = localStorage.getItem(storageKey);
@@ -73,8 +78,12 @@ export function usePOS() {
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
         setSales(sorted);
+        setIsLoading(false);
       },
-      error: (err) => console.error('Load sales error:', err),
+      error: (err) => {
+        console.error('Load sales error:', err);
+        setIsLoading(false);
+      },
     });
 
     return () => subscription.unsubscribe();
@@ -236,6 +245,45 @@ export function usePOS() {
     setCustomerId(null);
   };
 
+  const applyOrderDraft = async (
+    draftItems: Array<{ product: Product; quantity: number }>,
+    targetCustomerId?: string | null
+  ) => {
+    let resolvedType = selectedCustomerType;
+    if (targetCustomerId !== undefined) {
+      setCustomerId(targetCustomerId || null);
+      if (targetCustomerId) {
+        const cust = await localDb.customers.get(targetCustomerId);
+        resolvedType = cust?.type;
+      } else {
+        resolvedType = undefined;
+      }
+    }
+
+    const nextItems: CartItem[] = [];
+    for (const entry of draftItems) {
+      const available = getEffectiveStock(entry.product, effectiveBranchId);
+      if (available <= 0) continue;
+      const qty = Math.min(Math.max(1, Math.round(entry.quantity) || 1), available);
+      const resolved = resolveCustomerTierPrice(entry.product, resolvedType);
+      nextItems.push({
+        ...entry.product,
+        quantity: qty,
+        appliedPrice: resolved.price,
+        priceTier: resolved.tier,
+      });
+    }
+
+    if (nextItems.length === 0) {
+      toast.error('None of the drafted items have available stock in this branch');
+      return false;
+    }
+
+    setCart(nextItems);
+    toast.success(`Loaded ${nextItems.length} item(s) into POS cart`);
+    return true;
+  };
+
   const persistSaleAndSideEffects = async (
     sale: Sale,
     action: 'create' | 'update',
@@ -382,13 +430,15 @@ export function usePOS() {
       payerPhone?: string;
       cashTendered?: number;
       changeGiven?: number;
+      cashierId?: string;
+      cashierName?: string;
     }
   ): Promise<Sale | undefined> => {
     if (!user || !tenant || cart.length === 0) return undefined;
 
     const trialState = computeTrialState(tenant);
     if (trialState.isSoftLocked) {
-      toast.error('Your 14-day trial has expired. Upgrade in Billing to resume POS checkout.');
+      toast.error(`Your ${getTrialDaysCount()}-day trial has expired. Upgrade in Billing to resume POS checkout.`);
       return undefined;
     }
 
@@ -434,6 +484,8 @@ export function usePOS() {
       reference: `SALE-${Date.now()}`,
       ...(customerId ? { customerId } : {}),
       userId: user.uid,
+      ...(options?.cashierId ? { cashierId: options.cashierId } : {}),
+      ...(options?.cashierName ? { cashierName: options.cashierName } : {}),
       items: cart.map((item) => ({
         productId: item.id,
         name: item.name,
@@ -496,7 +548,9 @@ export function usePOS() {
         action: saleStatus === 'pending' ? 'SALE_PENDING_CREATED' : 'SALE_COMPLETED',
         entityType: 'sale',
         entityId: sale.id,
-        summary: `${sale.reference} — UGX ${sale.total.toLocaleString()} (${sale.paymentMethod})`,
+        summary: `${sale.reference} — UGX ${sale.total.toLocaleString()} (${sale.paymentMethod})${
+          options?.cashierName ? ` · Cashier: ${options.cashierName}` : ''
+        }`,
       });
 
       clearCart();
@@ -636,6 +690,461 @@ export function usePOS() {
     return true;
   };
 
+  const bulkImportSales = async (
+    rows: Array<Record<string, any>>,
+    options?: { deductStock?: boolean }
+  ): Promise<number> => {
+    if (!user || !tenant) return 0;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return 0;
+    }
+
+    const [allProducts, allCustomers, allBranches] = await Promise.all([
+      localDb.products.where('tenantId').equals(tenant.id).toArray(),
+      localDb.customers.where('tenantId').equals(tenant.id).toArray(),
+      localDb.branches.where('tenantId').equals(tenant.id).toArray(),
+    ]);
+    const branchIds = allBranches.map((b) => b.id);
+    const branchName = allBranches.find((b) => b.id === effectiveBranchId)?.name;
+
+    const findProduct = (sku?: string, name?: string) => {
+      const cleanSku = String(sku || '').trim().toLowerCase();
+      if (cleanSku) {
+        const bySku = allProducts.find(
+          (p) =>
+            (p.sku && p.sku.toLowerCase() === cleanSku) ||
+            (p.barcode && p.barcode.toLowerCase() === cleanSku)
+        );
+        if (bySku) return bySku;
+      }
+      const cleanName = String(name || '').trim().toLowerCase();
+      if (!cleanName) return undefined;
+      return (
+        allProducts.find((p) => p.name.trim().toLowerCase() === cleanName) ||
+        allProducts.find((p) => p.name.toLowerCase().includes(cleanName))
+      );
+    };
+
+    const findCustomer = (name?: string, phone?: string) => {
+      const cleanPhone = String(phone || '').replace(/[^\d]/g, '');
+      const cleanName = String(name || '').trim().toLowerCase();
+      return allCustomers.find(
+        (c) =>
+          (cleanPhone.length >= 9 && c.phone.replace(/[^\d]/g, '').endsWith(cleanPhone.slice(-9))) ||
+          (cleanName && c.name.trim().toLowerCase() === cleanName)
+      );
+    };
+
+    const salesToCreate: Sale[] = [];
+    const newCustomersToCreate: Customer[] = [];
+    const productUpdates = new Map<string, Product>();
+
+    const groupedByRef = new Map<
+      string,
+      {
+        reference: string;
+        customerId?: string;
+        items: Sale['items'];
+        subtotal: number;
+        discount: number;
+        total: number;
+        paymentMethod: string;
+        status: Sale['status'];
+        createdAt: string;
+      }
+    >();
+
+    rows.forEach((row, idx) => {
+      const totalVal = Math.max(0, Number(row.total) || 0);
+      const rawItems = Array.isArray(row.items) && row.items.length > 0 ? row.items : null;
+
+      const saleItems = rawItems
+        ? rawItems.slice(0, 200).map((it: any) => {
+            const matched = findProduct(it.sku, it.name);
+            const qty = Math.max(1, Number(it.quantity) || 1);
+            const unitPrice = Math.max(0, Number(it.price ?? it.unitPrice) || matched?.sellingPrice || 0);
+            const lineTotal = Math.max(0, Number(it.total) || qty * unitPrice);
+            return {
+              productId: matched?.id || 'imported-item',
+              name: String(it.name || matched?.name || 'Imported Item').slice(0, 150),
+              quantity: qty,
+              price: unitPrice,
+              costPrice: matched?.buyingPrice || 0,
+              total: lineTotal,
+            };
+          })
+        : [
+            (() => {
+              const matched = findProduct(row.sku, row.itemName);
+              const qty = Math.max(1, Number(row.quantity) || 1);
+              const unitPrice =
+                Math.max(0, Number(row.unitPrice) || 0) ||
+                (qty > 0 ? Math.round(totalVal / qty) : totalVal);
+              return {
+                productId: matched?.id || 'imported-item',
+                name: String(row.itemName || matched?.name || 'Imported Sale').slice(0, 150),
+                quantity: qty,
+                price: unitPrice,
+                costPrice: matched?.buyingPrice || 0,
+                total: totalVal || qty * unitPrice,
+              };
+            })(),
+          ];
+
+      const subtotalVal = saleItems.reduce((s, i) => s + i.total, 0);
+      const discountVal = Math.max(0, Number(row.discount) || 0);
+      const finalTotal = totalVal > 0 ? totalVal : Math.max(0, subtotalVal - discountVal);
+
+      if (finalTotal <= 0 && subtotalVal <= 0) return;
+
+      const cleanCustName = String(row.customerName || '').trim();
+      const normalizedCustPhone = normalizeUgPhone(row.customerPhone).slice(0, 30);
+      let matchedCust = findCustomer(cleanCustName, normalizedCustPhone);
+      if (
+        !matchedCust &&
+        cleanCustName &&
+        cleanCustName.toLowerCase() !== 'walk-in' &&
+        normalizedCustPhone.length >= 10
+      ) {
+        const createdCust: Customer = stripUndefined({
+          id: crypto.randomUUID(),
+          tenantId: tenant.id,
+          name: cleanCustName.slice(0, 150),
+          phone: normalizedCustPhone,
+          type: 'Individual',
+          creditLimit: 0,
+          currentBalance: 0,
+          loyaltyPoints: 0,
+          createdAt: new Date().toISOString(),
+        });
+        allCustomers.push(createdCust);
+        newCustomersToCreate.push(createdCust);
+        matchedCust = createdCust;
+      }
+
+      let createdIso = new Date().toISOString();
+      if (row.saleDate) {
+        const isoDate = normalizeIsoDate(row.saleDate);
+        const parsedDate = new Date(isoDate.includes('T') ? isoDate : `${isoDate}T12:00:00Z`);
+        if (!Number.isNaN(parsedDate.getTime())) {
+          createdIso = parsedDate.toISOString();
+        }
+      }
+
+      const rawStatus = String(row.status || 'completed').trim().toLowerCase();
+      const status: Sale['status'] =
+        rawStatus === 'pending' || rawStatus === 'overdue' || rawStatus === 'unpaid' || rawStatus === 'partial'
+          ? 'pending'
+          : rawStatus === 'refunded' || rawStatus === 'void' || rawStatus === 'voided'
+          ? 'refunded'
+          : 'completed';
+
+      const explicitRef = String(row.reference || '').trim().slice(0, 64);
+      const groupKey = explicitRef ? `REF_${explicitRef.toLowerCase()}` : `SINGLE_${idx}`;
+      const paymentMethod = String(row.paymentMethod || 'Cash').trim().slice(0, 64) || 'Cash';
+
+      const existingGroup = groupedByRef.get(groupKey);
+      if (existingGroup) {
+        existingGroup.items.push(...saleItems);
+        existingGroup.subtotal += subtotalVal || finalTotal;
+        existingGroup.discount += discountVal;
+        existingGroup.total += finalTotal;
+        if (!existingGroup.customerId && matchedCust?.id) {
+          existingGroup.customerId = matchedCust.id;
+        }
+        if (existingGroup.paymentMethod === 'Cash' && paymentMethod !== 'Cash') {
+          existingGroup.paymentMethod = paymentMethod;
+        }
+        if (status === 'pending' && existingGroup.status === 'completed') {
+          existingGroup.status = 'pending';
+        }
+      } else {
+        groupedByRef.set(groupKey, {
+          reference: explicitRef || `IMP-${Date.now().toString().slice(-6)}-${groupedByRef.size + 1}`,
+          ...(matchedCust ? { customerId: matchedCust.id } : {}),
+          items: [...saleItems],
+          subtotal: subtotalVal || finalTotal,
+          discount: discountVal,
+          total: finalTotal,
+          paymentMethod,
+          status,
+          createdAt: createdIso,
+        });
+      }
+    });
+
+    for (const grp of groupedByRef.values()) {
+      const sale: Sale = stripUndefined({
+        id: crypto.randomUUID(),
+        tenantId: tenant.id,
+        ...(effectiveBranchId ? { branchId: effectiveBranchId } : {}),
+        ...(branchName ? { branchName } : {}),
+        reference: grp.reference,
+        ...(grp.customerId ? { customerId: grp.customerId } : {}),
+        userId: user.uid,
+        cashierId: user.uid,
+        cashierName: user.name,
+        items: grp.items.slice(0, 200),
+        subtotal: grp.subtotal,
+        discount: grp.discount,
+        total: grp.total,
+        paymentMethod: grp.paymentMethod,
+        status: grp.status,
+        createdAt: grp.createdAt,
+      });
+
+      salesToCreate.push(sale);
+
+      if (options?.deductStock && grp.status !== 'refunded') {
+        for (const item of grp.items) {
+          if (item.productId === 'imported-item') continue;
+          const baseProd = productUpdates.get(item.productId) || allProducts.find((p) => p.id === item.productId);
+          if (baseProd) {
+            const stockUpdate = applyBranchStockDelta(baseProd, effectiveBranchId, -item.quantity, branchIds);
+            productUpdates.set(
+              baseProd.id,
+              stripUndefined({
+                ...baseProd,
+                currentStock: stockUpdate.currentStock,
+                branchStock: stockUpdate.branchStock,
+              })
+            );
+          }
+        }
+      }
+    }
+
+    if (salesToCreate.length === 0) {
+      toast.error('No valid sales rows found to import.');
+      return 0;
+    }
+
+    const updatedProductsList = Array.from(productUpdates.values());
+    await localDb.transaction('rw', [localDb.sales, localDb.products, localDb.customers], async () => {
+      await localDb.sales.bulkPut(salesToCreate);
+      if (updatedProductsList.length > 0) {
+        await localDb.products.bulkPut(updatedProductsList);
+      }
+      if (newCustomersToCreate.length > 0) {
+        await localDb.customers.bulkPut(newCustomersToCreate);
+      }
+    });
+
+    if (navigator.onLine) {
+      for (const cust of newCustomersToCreate) {
+        try {
+          await setDoc(doc(db, `tenants/${tenant.id}/customers`, cust.id), cust);
+        } catch {
+          await localDb.syncQueue.add({
+            tenantId: tenant.id,
+            table: 'customers',
+            action: 'create',
+            data: cust,
+            status: 'pending',
+            createdAt: Date.now(),
+          });
+        }
+      }
+      const CHUNK_SIZE = 10;
+      for (let i = 0; i < salesToCreate.length; i += CHUNK_SIZE) {
+        await Promise.all(
+          salesToCreate.slice(i, i + CHUNK_SIZE).map(async (sale) => {
+            try {
+              await setDoc(doc(db, `tenants/${tenant.id}/sales`, sale.id), sale);
+            } catch {
+              await localDb.syncQueue.add({
+                tenantId: tenant.id,
+                table: 'sales',
+                action: 'create',
+                data: sale,
+                status: 'pending',
+                createdAt: Date.now(),
+              });
+            }
+          })
+        );
+      }
+      for (const prod of updatedProductsList) {
+        try {
+          await setDoc(doc(db, `tenants/${tenant.id}/products`, prod.id), prod);
+        } catch {
+          await localDb.syncQueue.add({
+            tenantId: tenant.id,
+            table: 'products',
+            action: 'update',
+            data: prod,
+            status: 'pending',
+            createdAt: Date.now(),
+          });
+        }
+      }
+    } else {
+      await localDb.syncQueue.bulkAdd([
+        ...newCustomersToCreate.map((cust) => ({
+          tenantId: tenant.id,
+          table: 'customers' as const,
+          action: 'create' as const,
+          data: cust,
+          status: 'pending' as const,
+          createdAt: Date.now(),
+        })),
+        ...salesToCreate.map((sale) => ({
+          tenantId: tenant.id,
+          table: 'sales' as const,
+          action: 'create' as const,
+          data: sale,
+          status: 'pending' as const,
+          createdAt: Date.now(),
+        })),
+      ]);
+    }
+
+    void logWorkspaceAudit({
+      tenantId: tenant.id,
+      branchId: effectiveBranchId,
+      actorId: user.uid,
+      actorName: user.name,
+      actorRole: user.role,
+      action: 'SALE_BULK_IMPORT',
+      entityType: 'sale',
+      summary: `Imported ${salesToCreate.length} sale(s) via Smart Import${
+        options?.deductStock ? ' (with stock deduction)' : ''
+      }`,
+    });
+
+    toast.success(`Imported ${salesToCreate.length} sale${salesToCreate.length === 1 ? '' : 's'}`);
+    return salesToCreate.length;
+  };
+
+  const bulkImportRefunds = async (
+    rows: Array<Record<string, any>>,
+    options?: { restoreStock?: boolean }
+  ): Promise<number> => {
+    if (!user || !tenant) return 0;
+    if (!['admin', 'manager'].includes(user.role)) {
+      toast.error('Only managers or admins can import refunds');
+      return 0;
+    }
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return 0;
+    }
+
+    const [existingSales, allProducts, allBranches] = await Promise.all([
+      localDb.sales.where('tenantId').equals(tenant.id).toArray(),
+      localDb.products.where('tenantId').equals(tenant.id).toArray(),
+      localDb.branches.where('tenantId').equals(tenant.id).toArray(),
+    ]);
+    const branchIds = allBranches.map((b) => b.id);
+    const branchName = allBranches.find((b) => b.id === effectiveBranchId)?.name;
+
+    let processed = 0;
+
+    for (const row of rows) {
+      const ref = String(row.reference || '').trim();
+      const reason = String(row.refundReason || 'Imported customer refund').trim().slice(0, 300);
+      const matchedSale = ref
+        ? existingSales.find((s) => s.reference.toLowerCase() === ref.toLowerCase() && s.status !== 'refunded')
+        : undefined;
+
+      let refundDateIso = new Date().toISOString();
+      if (row.refundDate) {
+        const isoDate = normalizeIsoDate(row.refundDate);
+        const d = new Date(isoDate.includes('T') ? isoDate : `${isoDate}T12:00:00Z`);
+        if (!Number.isNaN(d.getTime())) refundDateIso = d.toISOString();
+      }
+
+      if (matchedSale) {
+        if (options?.restoreStock) {
+          const ok = await refundSale(matchedSale.id, reason);
+          if (ok) processed++;
+        } else {
+          const updated: Sale = stripUndefined({
+            ...matchedSale,
+            status: 'refunded',
+            refundedAt: refundDateIso,
+            refundReason: reason,
+          });
+          await persistSaleAndSideEffects(updated, 'update', [], null);
+          processed++;
+        }
+        continue;
+      }
+
+      const totalVal = Math.max(0, Number(row.total) || 0);
+      if (totalVal <= 0) continue;
+
+      const qty = Math.max(1, Number(row.quantity) || 1);
+      const cleanItemName = String(row.itemName || '').trim().toLowerCase();
+      const matchedProd = cleanItemName
+        ? allProducts.find((p) => p.name.trim().toLowerCase() === cleanItemName) ||
+          allProducts.find((p) => p.name.toLowerCase().includes(cleanItemName))
+        : undefined;
+
+      const refundRecord: Sale = stripUndefined({
+        id: crypto.randomUUID(),
+        tenantId: tenant.id,
+        ...(effectiveBranchId ? { branchId: effectiveBranchId } : {}),
+        ...(branchName ? { branchName } : {}),
+        reference: ref.slice(0, 64) || `REF-${Date.now().toString().slice(-6)}-${processed + 1}`,
+        userId: user.uid,
+        cashierId: user.uid,
+        cashierName: user.name,
+        items: [
+          {
+            productId: matchedProd?.id || 'imported-refund',
+            name: String(row.itemName || matchedProd?.name || 'Refunded Item').slice(0, 150),
+            quantity: qty,
+            price: Math.round(totalVal / qty),
+            costPrice: matchedProd?.buyingPrice || 0,
+            total: totalVal,
+          },
+        ],
+        subtotal: totalVal,
+        discount: 0,
+        total: totalVal,
+        paymentMethod: String(row.paymentMethod || 'Cash').trim().slice(0, 64) || 'Cash',
+        status: 'refunded',
+        refundedAt: refundDateIso,
+        refundReason: reason,
+        createdAt: refundDateIso,
+      });
+
+      const restoredProducts: Product[] = [];
+      if (options?.restoreStock && matchedProd) {
+        const restored = applyBranchStockDelta(matchedProd, effectiveBranchId, qty, branchIds);
+        restoredProducts.push(
+          stripUndefined({
+            ...matchedProd,
+            currentStock: restored.currentStock,
+            branchStock: restored.branchStock,
+          })
+        );
+      }
+
+      await persistSaleAndSideEffects(refundRecord, 'create', restoredProducts, null);
+      processed++;
+    }
+
+    if (processed > 0) {
+      void logWorkspaceAudit({
+        tenantId: tenant.id,
+        branchId: effectiveBranchId,
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        action: 'REFUND_BULK_IMPORT',
+        entityType: 'sale',
+        summary: `Imported ${processed} refund record(s) via Smart Import`,
+      });
+      toast.success(`Imported ${processed} refund record${processed === 1 ? '' : 's'}`);
+    } else {
+      toast.error('No valid refund records found to import.');
+    }
+    return processed;
+  };
+
   return {
     cart,
     heldCarts,
@@ -657,7 +1166,11 @@ export function usePOS() {
     processSale,
     refundSale,
     settlePendingSale,
+    bulkImportSales,
+    bulkImportRefunds,
+    applyOrderDraft,
     clearCart,
     sales,
+    isLoading,
   };
 }

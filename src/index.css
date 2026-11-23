@@ -1,26 +1,26 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", "Manrope", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
-  --color-primary: #0A2540;
-  --color-accent: #00C37F;
-  --color-accent-alt: #F5A623;
-  --color-surface: #FFFFFF;
-  --color-surface-alt: #EEF2F7;
-  --color-border: #E2E8F0;
-  --color-text-primary: #0A2540;
-  --color-text-secondary: #64748B;
-  --color-text-muted: #94A3B8;
-  --color-danger: #EF4444;
+  --color-primary: #0B1F3A;
+  --color-accent: #0F766E;
+  --color-accent-alt: #B45309;
+  --color-surface: #FBFDFF;
+  --color-surface-alt: #E5EBF3;
+  --color-border: #D5DEE9;
+  --color-text-primary: #0F1E33;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748B;
+  --color-danger: #DC2626;
 
   --radius-xl: 16px;
   --radius-lg: 12px;
   --radius-md: 8px;
   --radius-sm: 6px;
 
-  --shadow-soft: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.08);
+  --shadow-soft: 0 1px 2px rgba(11, 31, 58, 0.05), 0 4px 12px rgba(11, 31, 58, 0.04);
 
   /* Breakpoints */
   --breakpoint-xs: 360px;
@@ -33,7 +33,7 @@
 
 @layer base {
   body {
-    @apply bg-[#F7F9FC] text-primary font-sans antialiased;
+    @apply bg-[#EDF1F6] text-primary font-sans antialiased;
     font-size: max(0.875rem, 14px);
   }
 
@@ -41,8 +41,12 @@
     @apply font-bold tracking-tight text-primary;
   }
 
-  input, select, textarea {
-    font-size: max(1rem, 16px) !important;
+  @media (max-width: 767px) {
+    input:not([type="checkbox"]):not([type="radio"]),
+    select,
+    textarea {
+      font-size: max(1rem, 16px);
+    }
   }
 }
 
@@ -52,16 +56,16 @@
   }
 
   .btn {
-    @apply inline-flex items-center justify-center px-4 py-2 rounded-md font-medium transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none min-h-[44px] min-w-[44px];
+    @apply inline-flex items-center justify-center px-4 py-2 rounded-md font-semibold transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none min-h-[44px] min-w-[44px];
   }
 
   .btn-primary {
-    @apply bg-accent hover:bg-accent/90 shadow-sm;
+    @apply bg-accent hover:brightness-95 shadow-xs;
     color: var(--color-accent-contrast, #ffffff);
   }
 
   .btn-secondary {
-    @apply bg-white border border-primary text-primary hover:bg-surface-alt;
+    @apply bg-surface border border-border text-primary hover:bg-surface-alt;
   }
 
   .btn-ghost {
@@ -69,7 +73,11 @@
   }
 
   .input {
-    @apply w-full px-3 py-2 bg-white border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all min-h-[48px];
+    @apply w-full px-3 py-2 bg-[#F8FAFC] border border-border rounded-md focus:bg-white focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all min-h-[44px] sm:min-h-[46px];
+  }
+
+  .input-sm {
+    @apply w-full px-2.5 py-1.5 bg-[#F8FAFC] border border-border rounded-md focus:bg-white focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all min-h-[36px] text-xs;
   }
 
   /* Responsive Grids */
@@ -125,6 +133,67 @@
     font-weight: 700;
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
+  }
+  /* Skeleton Shimmer (GPU-composited sweep, reduced-motion safe) */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background-color: #E5EBF3;
+    border-radius: 6px;
+  }
+
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      rgba(251, 253, 255, 0) 0%,
+      rgba(251, 253, 255, 0.65) 50%,
+      rgba(251, 253, 255, 0) 100%
+    );
+    animation: skeleton-shimmer 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    will-change: transform;
+  }
+
+  .skeleton-dark {
+    position: relative;
+    overflow: hidden;
+    background-color: rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+  }
+
+  .skeleton-dark::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.14) 50%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    animation: skeleton-shimmer 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    will-change: transform;
+  }
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after,
+  .skeleton-dark::after {
+    animation: none;
+    display: none;
   }
 }
 

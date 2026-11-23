@@ -30,31 +30,41 @@ import { downloadCsv } from '../../utils/exportCsv';
 import { useAuthStore } from '../../store/authStore';
 import { getPlanQuota } from '../../utils/planLimits';
 import { hasSectionAccess } from '../../utils/rbac';
+import { KpiValueSkeleton, Skeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import { cn } from '../../lib/utils';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
-const StatCard = ({ title, value, deltaLabel, isPositive, icon: Icon, color }: any) => (
+const StatCard = ({ title, value, deltaLabel, isPositive, isLoading, icon: Icon, color }: any) => (
   <div className="card flex items-start justify-between gap-3">
-    <div className="min-w-0">
+    <div className="min-w-0 flex-1">
       <p className="text-text-muted text-sm font-medium mb-1">{title}</p>
-      <h3 className="text-xl md:text-2xl font-bold text-primary font-mono tabular-nums truncate">
-        {value}
-      </h3>
-      <div
-        className={cn(
-          'flex items-center gap-1 text-xs font-semibold mt-2',
-          isPositive === null
-            ? 'text-text-muted'
-            : isPositive
-            ? 'text-accent'
-            : 'text-danger'
-        )}
-      >
-        {isPositive === true && <ArrowUpRight size={14} />}
-        {isPositive === false && <ArrowDownRight size={14} />}
-        <span>{deltaLabel}</span>
-      </div>
+      {isLoading ? (
+        <div className="space-y-2 mt-1">
+          <KpiValueSkeleton className="w-28" />
+          <Skeleton className="h-3 w-32" />
+        </div>
+      ) : (
+        <>
+          <h3 className="text-xl md:text-2xl font-bold text-primary font-mono tabular-nums truncate">
+            {value}
+          </h3>
+          <div
+            className={cn(
+              'flex items-center gap-1 text-xs font-semibold mt-2',
+              isPositive === null
+                ? 'text-text-muted'
+                : isPositive
+                ? 'text-accent'
+                : 'text-danger'
+            )}
+          >
+            {isPositive === true && <ArrowUpRight size={14} />}
+            {isPositive === false && <ArrowDownRight size={14} />}
+            <span>{deltaLabel}</span>
+          </div>
+        </>
+      )}
     </div>
     <div className={cn('p-3 rounded-xl shrink-0', color)}>
       <Icon size={24} className="text-white" />
@@ -79,12 +89,13 @@ function calculatePercentDelta(current: number, previous: number, periodLabel: s
 
 export default function Dashboard() {
   const { user, tenant } = useAuthStore();
-  const { products } = useInventory();
-  const { sales } = usePOS();
+  const { products, isLoading: productsLoading } = useInventory();
+  const { sales, isLoading: salesLoading } = usePOS();
   const { customers } = useCustomers();
-  const { expenses } = useExpenses();
+  const { expenses, isLoading: expensesLoading } = useExpenses();
   const { activeBranchId, activeBranch } = useBranches();
   const [chartDays, setChartDays] = useState<7 | 30>(7);
+  const isInitialLoading = productsLoading || salesLoading || expensesLoading;
 
   const effectiveBranchId = activeBranchId && activeBranchId !== 'ALL' ? activeBranchId : null;
 
@@ -314,6 +325,7 @@ export default function Dashboard() {
           value={formatUGX(todaySalesTotal)}
           deltaLabel={todayDelta.label}
           isPositive={todayDelta.isPositive}
+          isLoading={salesLoading}
           icon={ShoppingCart}
           color="bg-accent"
         />
@@ -322,6 +334,7 @@ export default function Dashboard() {
           value={formatUGX(monthlyRevenue)}
           deltaLabel={monthDelta.label}
           isPositive={monthDelta.isPositive}
+          isLoading={salesLoading}
           icon={TrendingUp}
           color="bg-primary"
         />
@@ -330,6 +343,7 @@ export default function Dashboard() {
           value={formatUGX(monthlyGrossProfit)}
           deltaLabel={`${grossMarginPct}% margin · Exp ${formatUGX(monthlyExpensesTotal)}`}
           isPositive={monthlyGrossProfit >= 0}
+          isLoading={isInitialLoading}
           icon={DollarSign}
           color="bg-accent-alt"
         />
@@ -340,6 +354,7 @@ export default function Dashboard() {
             lowStockCount > 0 ? `${lowStockCount} need restocking` : `${customers.length} customers active`
           }
           isPositive={lowStockCount === 0}
+          isLoading={productsLoading}
           icon={lowStockCount > 0 ? AlertTriangle : Users}
           color={lowStockCount > 0 ? 'bg-danger' : 'bg-accent'}
         />
@@ -360,61 +375,94 @@ export default function Dashboard() {
             </select>
           </div>
           <div className="h-[250px] sm:h-[300px] w-full">
+            {salesLoading ? (
+              <Skeleton className="h-full w-full rounded-lg" />
+            ) : (
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-accent, #00C37F)" stopOpacity={0.18} />
-                    <stop offset="95%" stopColor="var(--color-accent, #00C37F)" stopOpacity={0} />
+                    <stop offset="5%" stopColor="var(--color-accent, #0F766E)" stopOpacity={0.16} />
+                    <stop offset="95%" stopColor="var(--color-accent, #0F766E)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94A3B8', fontSize: 10 }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94A3B8', fontSize: 10 }} width={45} />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#D5DEE9" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748B', fontSize: 10 }} />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#64748B', fontSize: 10 }}
+                  width={52}
+                  tickFormatter={(val: number) =>
+                    val >= 1000000
+                      ? `${(val / 1000000).toFixed(1)}M`
+                      : val >= 1000
+                      ? `${Math.round(val / 1000)}k`
+                      : String(val)
+                  }
+                />
                 <Tooltip
                   formatter={(value: number) => [formatUGX(value), 'Sales']}
                   contentStyle={{
                     borderRadius: '12px',
-                    border: 'none',
-                    boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+                    border: '1px solid #D5DEE9',
+                    boxShadow: '0 4px 12px rgba(11,31,58,0.08)',
                   }}
                 />
                 <Area
                   type="monotone"
                   dataKey="sales"
-                  stroke="var(--color-accent, #00C37F)"
-                  strokeWidth={3}
+                  stroke="var(--color-accent, #0F766E)"
+                  strokeWidth={2.5}
                   fillOpacity={1}
                   fill="url(#colorSales)"
                 />
               </AreaChart>
             </ResponsiveContainer>
+            )}
           </div>
         </div>
 
         <div className="card">
           <h3 className="font-bold text-lg mb-6">Top Selling Products</h3>
           <div className="space-y-6">
-            {topProducts.map((product, i) => (
-              <div key={i} className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 bg-surface-alt rounded-lg flex items-center justify-center font-bold text-primary shrink-0">
-                    {i + 1}
+            {salesLoading ? (
+              Array.from({ length: 4 }).map((_, idx) => (
+                <div key={idx} className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Skeleton className="w-10 h-10 rounded-lg shrink-0" />
+                    <div className="space-y-1.5">
+                      <Skeleton className="h-3.5 w-28" />
+                      <Skeleton className="h-2.5 w-16" />
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-primary truncate">{product.name}</p>
-                    <p className="text-xs text-text-muted tabular-nums">{product.quantity} units sold</p>
-                  </div>
+                  <Skeleton className="h-4 w-20 shrink-0" />
                 </div>
-                <p className="text-sm font-bold text-accent font-mono tabular-nums shrink-0">
-                  {formatUGX(product.revenue)}
-                </p>
-              </div>
-            ))}
-            {topProducts.length === 0 && (
-              <div className="text-center py-8">
-                <p className="text-text-muted text-sm">No sales data available</p>
-              </div>
+              ))
+            ) : (
+              <>
+                {topProducts.map((product, i) => (
+                  <div key={i} className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 bg-surface-alt rounded-lg flex items-center justify-center font-bold text-primary shrink-0">
+                        {i + 1}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-primary truncate">{product.name}</p>
+                        <p className="text-xs text-text-muted tabular-nums">{product.quantity} units sold</p>
+                      </div>
+                    </div>
+                    <p className="text-sm font-bold text-accent font-mono tabular-nums shrink-0">
+                      {formatUGX(product.revenue)}
+                    </p>
+                  </div>
+                ))}
+                {topProducts.length === 0 && (
+                  <div className="text-center py-8">
+                    <p className="text-text-muted text-sm">No sales data available</p>
+                  </div>
+                )}
+              </>
             )}
           </div>
           {hasSectionAccess(user, 'reports') && (
@@ -434,8 +482,8 @@ export default function Dashboard() {
             </Link>
           )}
         </div>
-        <div className="overflow-x-auto -mx-6 px-6">
-          <table className="w-full text-left border-collapse">
+        <div className="hidden md:block overflow-x-auto -mx-6 px-6">
+          <table className="w-full text-left border-collapse min-w-[560px]">
             <thead>
               <tr className="border-b border-border">
                 <th className="py-4 text-xs font-bold text-text-muted uppercase tracking-wider">Reference</th>
@@ -446,29 +494,67 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {validBranchSales.slice(0, 5).map((sale) => (
-                <tr key={sale.id} className="hover:bg-surface-alt transition-colors">
-                  <td className="py-4 text-sm font-bold text-primary font-mono">{sale.reference}</td>
-                  <td className="py-4 text-sm text-text-secondary">
-                    {(sale.customerId && customerMap.get(sale.customerId)) || 'Walk-in Customer'}
-                  </td>
-                  <td className="py-4 text-sm font-bold text-accent font-mono tabular-nums">
-                    {formatUGX(sale.total)}
-                  </td>
-                  <td className="py-4 text-xs font-medium text-text-secondary">
-                    {sale.paymentMethod}
-                  </td>
-                  <td className="py-4 text-sm text-text-muted tabular-nums">
-                    {new Date(sale.createdAt).toLocaleTimeString()}
-                  </td>
-                </tr>
-              ))}
+              {salesLoading ? (
+                <TableRowsSkeleton rows={5} columns={5} />
+              ) : (
+                validBranchSales.slice(0, 5).map((sale) => (
+                  <tr key={sale.id} className="hover:bg-surface-alt transition-colors">
+                    <td className="py-4 text-sm font-bold text-primary font-mono">{sale.reference}</td>
+                    <td className="py-4 text-sm text-text-secondary">
+                      {(sale.customerId && customerMap.get(sale.customerId)) || 'Walk-in Customer'}
+                    </td>
+                    <td className="py-4 text-sm font-bold text-accent font-mono tabular-nums">
+                      {formatUGX(sale.total)}
+                    </td>
+                    <td className="py-4 text-xs font-medium text-text-secondary">
+                      {sale.paymentMethod}
+                    </td>
+                    <td className="py-4 text-sm text-text-muted tabular-nums">
+                      {new Date(sale.createdAt).toLocaleTimeString()}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
-          {validBranchSales.length === 0 && (
+          {!salesLoading && validBranchSales.length === 0 && (
             <div className="text-center py-12">
               <p className="text-text-muted">No recent sales found</p>
             </div>
+          )}
+        </div>
+
+        <div className="md:hidden divide-y divide-border -mx-4 sm:-mx-6">
+          {salesLoading ? (
+            <div className="p-4 space-y-3">
+              {Array.from({ length: 4 }).map((_, idx) => (
+                <Skeleton key={idx} className="h-14 w-full rounded-lg" />
+              ))}
+            </div>
+          ) : validBranchSales.length === 0 ? (
+            <div className="text-center py-10 px-4">
+              <p className="text-text-muted text-sm">No recent sales found</p>
+            </div>
+          ) : (
+            validBranchSales.slice(0, 5).map((sale) => (
+              <div key={sale.id} className="px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-primary font-mono truncate">{sale.reference}</p>
+                  <p className="text-xs text-text-secondary truncate">
+                    {(sale.customerId && customerMap.get(sale.customerId)) || 'Walk-in Customer'} ·{' '}
+                    {sale.paymentMethod}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-sm font-bold text-accent font-mono tabular-nums">
+                    {formatUGX(sale.total)}
+                  </p>
+                  <p className="text-[11px] text-text-muted tabular-nums">
+                    {new Date(sale.createdAt).toLocaleTimeString()}
+                  </p>
+                </div>
+              </div>
+            ))
           )}
         </div>
       </div>

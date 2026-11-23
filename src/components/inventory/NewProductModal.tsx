@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Package, Barcode, Tag, DollarSign, Layers, Camera } from 'lucide-react';
+import { X, Package, Barcode, Tag, DollarSign, Layers, Camera, Wand2 } from 'lucide-react';
 import { useInventory } from '../../hooks/useInventory';
+import { EnrichedProductSuggestion, runAiAssistantTool } from '../../services/aiService';
 import { BarcodeScannerModal } from '../shared/BarcodeScannerModal';
 import { Product } from '../../types';
 import toast from 'react-hot-toast';
@@ -32,6 +33,7 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
   const { addProduct, updateProduct } = useInventory();
   const [formData, setFormData] = useState(DEFAULT_FORM);
   const [isSaving, setIsSaving] = useState(false);
+  const [isEnriching, setIsEnriching] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
 
   useEffect(() => {
@@ -58,6 +60,43 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
   }, [editingProduct, isOpen]);
 
   if (!isOpen) return null;
+
+  const handleAiEnrich = async () => {
+    if (!formData.name.trim()) {
+      toast.error('Enter a product name first so AI can suggest category and SKU');
+      return;
+    }
+    setIsEnriching(true);
+    try {
+      const res = await runAiAssistantTool<{ suggestions: EnrichedProductSuggestion[] }>(
+        'enrich_products',
+        {
+          items: [
+            {
+              name: formData.name.trim(),
+              category: formData.category,
+              unit: formData.unit,
+              sku: formData.sku,
+            },
+          ],
+        }
+      );
+      const first = res.suggestions?.[0];
+      if (first) {
+        setFormData((prev) => ({
+          ...prev,
+          name: first.standardizedName || prev.name,
+          category: first.suggestedCategory || prev.category,
+          sku: prev.sku.trim() ? prev.sku : first.suggestedSku || prev.sku,
+        }));
+        toast.success('Suggested standardized name, category & SKU — review before saving');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not enrich product details');
+    } finally {
+      setIsEnriching(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,8 +135,8 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
 
   return (
     <>
-      <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden max-h-[90vh] flex flex-col">
+      <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden max-h-[90dvh] flex flex-col">
           <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
             <div className="flex items-center gap-3">
               <Package size={24} />
@@ -115,10 +154,21 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="p-6 sm:p-8 space-y-5 overflow-y-auto">
+          <form onSubmit={handleSubmit} className="p-5 sm:p-8 space-y-5 overflow-y-auto flex-1">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div className="col-span-full">
-                <label className="block text-sm font-bold text-primary mb-1.5">Product Name *</label>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label className="block text-sm font-bold text-primary">Product Name *</label>
+                  <button
+                    type="button"
+                    disabled={isEnriching || !formData.name.trim()}
+                    onClick={handleAiEnrich}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-accent hover:underline disabled:opacity-40 whitespace-nowrap"
+                  >
+                    <Wand2 size={13} />
+                    {isEnriching ? 'Enriching...' : 'AI Standardize & SKU'}
+                  </button>
+                </div>
                 <div className="relative">
                   <Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" size={18} />
                   <input

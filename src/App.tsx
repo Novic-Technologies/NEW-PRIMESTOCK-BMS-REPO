@@ -1,49 +1,67 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { Layout } from './components/layout/Layout';
-import Dashboard from './pages/dashboard/Dashboard';
-import Products from './pages/inventory/Products';
-import POS from './pages/pos/POS';
-import Customers from './pages/customers/Customers';
-import Expenses from './pages/accounting/Expenses';
-import SalesHistory from './pages/sales/SalesHistory';
-import Suppliers from './pages/suppliers/Suppliers';
-import Reports from './pages/reports/Reports';
-import Billing from './pages/billing/Billing';
-import PurchaseOrders from './pages/purchases/PurchaseOrders';
-import AICopilot from './pages/ai/AICopilot';
-import TeamBranches from './pages/team/TeamBranches';
-import Payroll from './pages/payroll/Payroll';
-import ShiftsAudit from './pages/shifts/ShiftsAudit';
-import Settings from './pages/settings/Settings';
-import MasterDashboard from './pages/master/MasterDashboard';
-import Login from './pages/auth/Login';
+import { MasterConsoleLayout } from './components/master/MasterConsoleLayout';
 import { TierGate } from './components/shared/TierGate';
+import { PageContentSkeleton, WorkspaceBootSkeleton } from './components/shared/Skeletons';
+import { routeLoaders } from './utils/routePrefetch';
 import { useAuthStore } from './store/authStore';
 import { useAuthObserver } from './hooks/useAuth';
+import { usePlatformPlansSync } from './utils/platformPlans';
 import { applyTenantTheme } from './utils/branding';
 import { getDefaultRouteForUser, hasSectionAccess } from './utils/rbac';
 import { AppSection } from './types';
+
+const Login = lazy(routeLoaders.login);
+const Dashboard = lazy(routeLoaders.dashboard);
+const POS = lazy(routeLoaders.pos);
+const SalesHistory = lazy(routeLoaders.sales);
+const Products = lazy(routeLoaders.inventory);
+const Customers = lazy(routeLoaders.customers);
+const ShiftsAudit = lazy(routeLoaders.shifts);
+const BulkImport = lazy(routeLoaders.bulkImport);
+const PurchaseOrders = lazy(routeLoaders.purchases);
+const Suppliers = lazy(routeLoaders.suppliers);
+const Expenses = lazy(routeLoaders.finance);
+const Payroll = lazy(routeLoaders.payroll);
+const Reports = lazy(routeLoaders.reports);
+const AICopilot = lazy(routeLoaders.ai);
+const TeamBranches = lazy(routeLoaders.team);
+const Billing = lazy(routeLoaders.billing);
+const Settings = lazy(routeLoaders.settings);
+const MasterOverview = lazy(routeLoaders.masterOverview);
+const MasterMonitoring = lazy(routeLoaders.masterMonitoring);
+const MasterApprovals = lazy(routeLoaders.masterApprovals);
+const MasterTiersUpgrades = lazy(routeLoaders.masterPlans);
+const MasterPaymentChannels = lazy(routeLoaders.masterPayments);
+const MasterSystemOps = lazy(routeLoaders.masterSystem);
+
+const RouteSuspense = ({
+  variant = 'default',
+  children,
+}: {
+  variant?: 'dashboard' | 'table' | 'pos' | 'cards' | 'master' | 'default';
+  children: React.ReactNode;
+}) => <Suspense fallback={<PageContentSkeleton variant={variant} />}>{children}</Suspense>;
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, isLoading } = useAuthStore();
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-surface-alt">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-4 border-accent border-t-transparent rounded-full animate-spin" />
-          <p className="text-text-muted font-bold tracking-widest uppercase text-xs">
-            Loading Workspace...
-          </p>
-        </div>
-      </div>
-    );
+    return <WorkspaceBootSkeleton />;
   }
 
   if (!user) return <Navigate to="/login" replace />;
 
+  return <>{children}</>;
+};
+
+const BusinessRoute = ({ children }: { children: React.ReactNode }) => {
+  const { isMasterAdmin } = useAuthStore();
+  if (isMasterAdmin) {
+    return <Navigate to="/master" replace />;
+  }
   return <>{children}</>;
 };
 
@@ -54,31 +72,33 @@ const SectionRoute = ({
   section: AppSection;
   children: React.ReactNode;
 }) => {
-  const { user } = useAuthStore();
+  const { user, isMasterAdmin } = useAuthStore();
   if (!user) return <Navigate to="/login" replace />;
+  if (isMasterAdmin) return <Navigate to="/master" replace />;
   if (!hasSectionAccess(user, section)) {
-    const fallback = getDefaultRouteForUser(user);
+    const fallback = getDefaultRouteForUser(user, false);
     return <Navigate to={fallback === '/' && section === 'dashboard' ? '/finance' : fallback} replace />;
   }
   return <>{children}</>;
 };
 
 const DefaultHomeRedirect = () => {
-  const { user } = useAuthStore();
-  return <Navigate to={getDefaultRouteForUser(user)} replace />;
+  const { user, isMasterAdmin } = useAuthStore();
+  return <Navigate to={getDefaultRouteForUser(user, isMasterAdmin)} replace />;
 };
 
 const MasterRoute = ({ children }: { children: React.ReactNode }) => {
   const { isMasterAdmin, user } = useAuthStore();
   if (!isMasterAdmin) {
-    return <Navigate to={getDefaultRouteForUser(user)} replace />;
+    return <Navigate to={getDefaultRouteForUser(user, false)} replace />;
   }
   return <>{children}</>;
 };
 
 export default function App() {
   useAuthObserver();
-  const { tenant } = useAuthStore();
+  const { user, tenant } = useAuthStore();
+  usePlatformPlansSync(Boolean(user));
 
   React.useEffect(() => {
     applyTenantTheme(tenant);
@@ -87,155 +107,255 @@ export default function App() {
   return (
     <Router>
       <Toaster position="top-right" />
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          }
-        >
+      <Suspense fallback={<WorkspaceBootSkeleton />}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+
+          {/* Dedicated Platform Governance Console for Master Admin */}
           <Route
-            index
+            path="/master"
             element={
-              <SectionRoute section="dashboard">
-                <Dashboard />
-              </SectionRoute>
+              <ProtectedRoute>
+                <MasterRoute>
+                  <MasterConsoleLayout />
+                </MasterRoute>
+              </ProtectedRoute>
             }
-          />
+          >
+            <Route
+              index
+              element={
+                <RouteSuspense variant="master">
+                  <MasterOverview />
+                </RouteSuspense>
+              }
+            />
+            <Route
+              path="monitoring"
+              element={
+                <RouteSuspense variant="master">
+                  <MasterMonitoring />
+                </RouteSuspense>
+              }
+            />
+            <Route
+              path="approvals"
+              element={
+                <RouteSuspense variant="master">
+                  <MasterApprovals />
+                </RouteSuspense>
+              }
+            />
+            <Route
+              path="plans"
+              element={
+                <RouteSuspense variant="default">
+                  <MasterTiersUpgrades />
+                </RouteSuspense>
+              }
+            />
+            <Route
+              path="payments"
+              element={
+                <RouteSuspense variant="default">
+                  <MasterPaymentChannels />
+                </RouteSuspense>
+              }
+            />
+            <Route
+              path="system"
+              element={
+                <RouteSuspense variant="default">
+                  <MasterSystemOps />
+                </RouteSuspense>
+              }
+            />
+            <Route path="*" element={<Navigate to="/master" replace />} />
+          </Route>
+
+          {/* Merchant Business Storefront Shell */}
           <Route
-            path="pos"
+            path="/"
             element={
-              <SectionRoute section="pos">
-                <POS />
-              </SectionRoute>
+              <ProtectedRoute>
+                <BusinessRoute>
+                  <Layout />
+                </BusinessRoute>
+              </ProtectedRoute>
             }
-          />
-          <Route
-            path="sales"
-            element={
-              <SectionRoute section="sales">
-                <SalesHistory />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="inventory"
-            element={
-              <SectionRoute section="inventory">
-                <Products />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="customers"
-            element={
-              <SectionRoute section="customers">
-                <Customers />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="shifts"
-            element={
-              <SectionRoute section="shifts">
-                <ShiftsAudit />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="purchases"
-            element={
-              <SectionRoute section="purchases">
-                <TierGate feature="suppliersAndPOs">
-                  <PurchaseOrders />
-                </TierGate>
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="suppliers"
-            element={
-              <SectionRoute section="suppliers">
-                <TierGate feature="suppliersAndPOs">
-                  <Suppliers />
-                </TierGate>
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="finance"
-            element={
-              <SectionRoute section="finance">
-                <Expenses />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="payroll"
-            element={
-              <SectionRoute section="payroll">
-                <TierGate feature="payrollPayeNssf">
-                  <Payroll />
-                </TierGate>
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="reports"
-            element={
-              <SectionRoute section="reports">
-                <TierGate feature="advancedReports">
-                  <Reports />
-                </TierGate>
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="ai"
-            element={
-              <SectionRoute section="ai">
-                <AICopilot />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="team"
-            element={
-              <SectionRoute section="team">
-                <TeamBranches />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="billing"
-            element={
-              <SectionRoute section="billing">
-                <Billing />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="settings"
-            element={
-              <SectionRoute section="settings">
-                <Settings />
-              </SectionRoute>
-            }
-          />
-          <Route
-            path="master"
-            element={
-              <MasterRoute>
-                <MasterDashboard />
-              </MasterRoute>
-            }
-          />
-          <Route path="*" element={<DefaultHomeRedirect />} />
-        </Route>
-      </Routes>
+          >
+            <Route
+              index
+              element={
+                <SectionRoute section="dashboard">
+                  <RouteSuspense variant="dashboard">
+                    <Dashboard />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="pos"
+              element={
+                <SectionRoute section="pos">
+                  <RouteSuspense variant="pos">
+                    <POS />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="sales"
+              element={
+                <SectionRoute section="sales">
+                  <RouteSuspense variant="table">
+                    <SalesHistory />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="inventory"
+              element={
+                <SectionRoute section="inventory">
+                  <RouteSuspense variant="table">
+                    <Products />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="customers"
+              element={
+                <SectionRoute section="customers">
+                  <RouteSuspense variant="table">
+                    <Customers />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="shifts"
+              element={
+                <SectionRoute section="shifts">
+                  <RouteSuspense variant="table">
+                    <ShiftsAudit />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="bulk-import"
+              element={
+                <SectionRoute section="bulk_import">
+                  <RouteSuspense variant="default">
+                    <BulkImport />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="purchases"
+              element={
+                <SectionRoute section="purchases">
+                  <TierGate feature="suppliersAndPOs">
+                    <RouteSuspense variant="table">
+                      <PurchaseOrders />
+                    </RouteSuspense>
+                  </TierGate>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="suppliers"
+              element={
+                <SectionRoute section="suppliers">
+                  <TierGate feature="suppliersAndPOs">
+                    <RouteSuspense variant="cards">
+                      <Suppliers />
+                    </RouteSuspense>
+                  </TierGate>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="finance"
+              element={
+                <SectionRoute section="finance">
+                  <RouteSuspense variant="table">
+                    <Expenses />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="payroll"
+              element={
+                <SectionRoute section="payroll">
+                  <TierGate feature="payrollPayeNssf">
+                    <RouteSuspense variant="table">
+                      <Payroll />
+                    </RouteSuspense>
+                  </TierGate>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="reports"
+              element={
+                <SectionRoute section="reports">
+                  <TierGate feature="advancedReports">
+                    <RouteSuspense variant="dashboard">
+                      <Reports />
+                    </RouteSuspense>
+                  </TierGate>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="ai"
+              element={
+                <SectionRoute section="ai">
+                  <RouteSuspense variant="dashboard">
+                    <AICopilot />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="team"
+              element={
+                <SectionRoute section="team">
+                  <RouteSuspense variant="table">
+                    <TeamBranches />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="billing"
+              element={
+                <SectionRoute section="billing">
+                  <RouteSuspense variant="default">
+                    <Billing />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route
+              path="settings"
+              element={
+                <SectionRoute section="settings">
+                  <RouteSuspense variant="default">
+                    <Settings />
+                  </RouteSuspense>
+                </SectionRoute>
+              }
+            />
+            <Route path="*" element={<DefaultHomeRedirect />} />
+          </Route>
+        </Routes>
+      </Suspense>
     </Router>
   );
 }

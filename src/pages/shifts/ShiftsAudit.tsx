@@ -6,6 +6,7 @@ import { useBranches } from '../../hooks/useBranches';
 import { useAuthStore } from '../../store/authStore';
 import { RegisterShift } from '../../types';
 import { formatUGX, formatDate } from '../../utils/format';
+import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import { cn } from '../../lib/utils';
 
 const ROLE_BADGE_CLASSES: Record<string, string> = {
@@ -92,7 +93,7 @@ export default function ShiftsAudit() {
         </div>
 
         {canViewAudit && (
-          <div className="flex items-center gap-1 p-1 bg-surface-alt rounded-lg border border-border self-start">
+          <div className="flex items-center gap-1 p-1 bg-surface-alt rounded-lg border border-border self-start max-w-full overflow-x-auto">
             <button
               type="button"
               onClick={() => setActiveTab('shifts')}
@@ -129,7 +130,88 @@ export default function ShiftsAudit() {
             <History size={18} className="text-primary" />
             <h2 className="font-bold text-primary">Register Shifts ({branchShifts.length})</h2>
           </div>
-          <div className="overflow-x-auto">
+          <div className="md:hidden divide-y divide-border">
+            {isLoading ? (
+              <MobileListSkeleton cards={4} />
+            ) : branchShifts.length === 0 ? (
+              <div className="px-4 py-10 text-center text-sm text-text-muted">
+                No cash drawer shifts recorded yet. Open a shift from POS.
+              </div>
+            ) : (
+              branchShifts.map((shift) => (
+                <div key={shift.id} className="p-4 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-bold text-primary truncate">{shift.userName}</p>
+                      <p className="text-xs text-text-muted">
+                        {(shift.branchId && branchMap.get(shift.branchId)) || 'Main Branch'} ·{' '}
+                        {shift.salesCount} sales
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        'text-[11px] font-bold uppercase px-2 py-0.5 rounded-md border shrink-0',
+                        shift.status === 'open'
+                          ? 'bg-accent/10 text-accent border-accent/25'
+                          : 'bg-surface-alt text-text-secondary border-border'
+                      )}
+                    >
+                      {shift.status}
+                    </span>
+                  </div>
+                  <div className="text-xs text-text-secondary space-y-0.5">
+                    <p>Opened: {formatDate(shift.openedAt)}</p>
+                    {shift.closedAt && (
+                      <p className="text-text-muted">Closed: {formatDate(shift.closedAt)}</p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 p-2.5 rounded-lg bg-surface-alt/50 border border-border/60 text-xs">
+                    <div>
+                      <p className="text-[10px] uppercase text-text-muted font-semibold">Float</p>
+                      <p className="font-mono tabular-nums font-medium">{formatUGX(shift.openingFloat)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase text-text-muted font-semibold">Expected</p>
+                      <p className="font-mono tabular-nums font-bold text-primary">
+                        {formatUGX(shift.expectedCash)}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase text-text-muted font-semibold">Variance</p>
+                      {shift.variance === undefined ? (
+                        <span className="font-mono text-text-muted">-</span>
+                      ) : (
+                        <span
+                          className={cn(
+                            'font-mono tabular-nums font-bold',
+                            shift.variance === 0
+                              ? 'text-accent'
+                              : shift.variance > 0
+                              ? 'text-primary'
+                              : 'text-danger'
+                          )}
+                        >
+                          {shift.variance >= 0 ? '+' : ''}
+                          {formatUGX(shift.variance)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedShift(shift)}
+                      className="btn btn-secondary text-xs py-1.5 px-3 min-h-[36px] whitespace-nowrap"
+                    >
+                      View Z-Report
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[820px]">
               <thead>
                 <tr className="bg-surface-alt/50 border-b border-border text-xs font-bold text-text-muted uppercase tracking-wider">
@@ -144,11 +226,7 @@ export default function ShiftsAudit() {
               </thead>
               <tbody className="divide-y divide-border text-sm">
                 {isLoading ? (
-                  <tr>
-                    <td colSpan={7} className="px-6 py-10 text-center">
-                      <div className="w-7 h-7 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-                    </td>
-                  </tr>
+                  <TableRowsSkeleton rows={5} columns={7} />
                 ) : branchShifts.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="px-6 py-10 text-center text-text-muted">
@@ -229,12 +307,12 @@ export default function ShiftsAudit() {
                 Every action by Admins, Managers, Cashiers, Accountants, and Inventory Clerks is recorded automatically.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
               <select
                 value={roleFilter}
                 onChange={(e) => setRoleFilter(e.target.value)}
                 aria-label="Filter audit logs by role"
-                className="input py-1.5 px-3 text-xs w-auto min-w-[130px]"
+                className="input-sm flex-1 sm:flex-none sm:min-w-[130px]"
               >
                 <option value="all">All Roles</option>
                 <option value="admin">Admin</option>
@@ -247,7 +325,7 @@ export default function ShiftsAudit() {
                 value={entityFilter}
                 onChange={(e) => setEntityFilter(e.target.value)}
                 aria-label="Filter audit logs by module"
-                className="input py-1.5 px-3 text-xs w-auto min-w-[140px]"
+                className="input-sm flex-1 sm:flex-none sm:min-w-[140px]"
               >
                 <option value="all">All Modules</option>
                 <option value="auth">Sign-In &amp; Auth</option>
@@ -271,7 +349,7 @@ export default function ShiftsAudit() {
                 <input
                   type="text"
                   placeholder="Search actor, action..."
-                  className="input pl-8 py-1.5 text-xs"
+                  className="input-sm pl-8 w-full"
                   value={auditSearch}
                   onChange={(e) => setAuditSearch(e.target.value)}
                 />
@@ -280,7 +358,7 @@ export default function ShiftsAudit() {
                 <button
                   type="button"
                   onClick={handleExportAuditCsv}
-                  className="btn btn-secondary text-xs py-1.5 px-3 min-h-[34px] gap-1.5 whitespace-nowrap"
+                  className="btn btn-secondary text-xs py-1.5 px-3 min-h-[36px] gap-1.5 whitespace-nowrap"
                 >
                   <Download size={14} />
                   Export CSV
@@ -289,7 +367,44 @@ export default function ShiftsAudit() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="md:hidden divide-y divide-border">
+            {logsLoading ? (
+              <MobileListSkeleton cards={5} />
+            ) : filteredLogs.length === 0 ? (
+              <div className="px-4 py-10 text-center text-sm text-text-muted">
+                No matching audit events found
+              </div>
+            ) : (
+              filteredLogs.slice(0, 200).map((log) => (
+                <div key={log.id} className="p-4 space-y-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm text-primary truncate">{log.actorName}</p>
+                      <p className="text-[11px] font-mono text-text-muted">
+                        {new Date(log.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        'px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wide shrink-0',
+                        ROLE_BADGE_CLASSES[log.actorRole.toLowerCase()] ||
+                          'bg-surface-alt text-text-secondary border-border'
+                      )}
+                    >
+                      {log.actorRole}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap text-xs">
+                    <span className="font-mono font-bold text-primary">{log.action}</span>
+                    <span className="text-[11px] text-text-muted capitalize">· {log.entityType}</span>
+                  </div>
+                  <p className="text-xs text-text-secondary">{log.summary}</p>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[780px]">
               <thead>
                 <tr className="bg-surface-alt/50 border-b border-border text-xs font-bold text-text-muted uppercase tracking-wider">
@@ -301,11 +416,7 @@ export default function ShiftsAudit() {
               </thead>
               <tbody className="divide-y divide-border text-sm">
                 {logsLoading ? (
-                  <tr>
-                    <td colSpan={4} className="px-6 py-10 text-center">
-                      <div className="w-7 h-7 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-                    </td>
-                  </tr>
+                  <TableRowsSkeleton rows={6} columns={4} />
                 ) : filteredLogs.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-6 py-10 text-center text-text-muted">
@@ -348,19 +459,20 @@ export default function ShiftsAudit() {
 
       {/* Printable Z-Report Modal */}
       {selectedShift && (
-        <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white no-print">
+        <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white no-print shrink-0">
               <h3 className="text-lg font-bold text-white">Shift Z-Report</h3>
               <button
                 type="button"
                 onClick={() => setSelectedShift(null)}
                 className="p-1 hover:bg-white/10 rounded-lg"
+                aria-label="Close Z-Report"
               >
                 <X size={20} />
               </button>
             </div>
-            <div className="p-6 space-y-4 print-content text-sm">
+            <div className="p-5 sm:p-6 space-y-4 print-content text-sm overflow-y-auto flex-1">
               <div className="text-center border-b border-border pb-3">
                 <h4 className="font-bold text-lg text-primary">{tenant?.name || 'PRIMESTOCK BMS'}</h4>
                 <p className="text-xs text-text-muted">
@@ -440,7 +552,7 @@ export default function ShiftsAudit() {
                 )}
               </div>
             </div>
-            <div className="p-4 bg-surface-alt border-t border-border flex gap-3 no-print">
+            <div className="p-4 bg-surface-alt border-t border-border flex gap-3 no-print shrink-0">
               <button
                 type="button"
                 onClick={() => setSelectedShift(null)}

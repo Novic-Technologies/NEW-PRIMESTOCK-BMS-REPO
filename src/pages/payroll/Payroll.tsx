@@ -15,6 +15,7 @@ import { useAuthStore } from '../../store/authStore';
 import { calculatePayrollEntry } from '../../utils/payrollUg';
 import { formatUGX, formatDate } from '../../utils/format';
 import { PayrollEntry, PayrollRun, TenantMember } from '../../types';
+import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
 import toast from 'react-hot-toast';
 
 export default function Payroll() {
@@ -115,17 +116,17 @@ export default function Payroll() {
           </p>
         </div>
         {canRunPayroll && (
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
             <input
               type="text"
               aria-label="Payroll period"
-              className="input w-44 py-2 text-sm"
+              className="input-sm w-full sm:w-44"
               value={periodLabel}
               onChange={(e) => setPeriodLabel(e.target.value)}
             />
             <select
               aria-label="Payroll payment method"
-              className="input w-40 py-2 text-sm"
+              className="input-sm flex-1 sm:flex-none sm:w-40"
               value={paymentMethod}
               onChange={(e) => setPaymentMethod(e.target.value)}
             >
@@ -137,9 +138,9 @@ export default function Payroll() {
               type="button"
               disabled={isProcessing || totals.gross <= 0}
               onClick={handleProcessPayroll}
-              className="btn btn-primary gap-2 whitespace-nowrap"
+              className="btn btn-primary text-xs sm:text-sm gap-2 whitespace-nowrap flex-1 sm:flex-none"
             >
-              <CheckCircle2 size={18} />
+              <CheckCircle2 size={16} />
               {isProcessing ? 'Processing...' : 'Run Payroll'}
             </button>
           </div>
@@ -204,7 +205,65 @@ export default function Payroll() {
             </p>
           </div>
         </div>
-        <div className="overflow-x-auto">
+        <div className="md:hidden divide-y divide-border">
+          {activeMembers.length === 0 ? (
+            <div className="px-4 py-10 text-center text-sm text-text-muted">
+              No active staff members found
+            </div>
+          ) : (
+            activeMembers.map((member, idx) => {
+              const calc = previewEntries[idx];
+              return (
+                <div key={member.uid} className="p-4 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-bold text-primary truncate">{member.name}</p>
+                      <p className="text-xs text-text-muted capitalize">
+                        {member.role} · TIN: {member.tinNumber || '-'} · NSSF: {member.nssfNumber || '-'}
+                      </p>
+                    </div>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => openSalaryEditor(member)}
+                        className="p-2 text-text-muted hover:text-primary hover:bg-surface-alt rounded-lg shrink-0"
+                        aria-label={`Edit salary for ${member.name}`}
+                      >
+                        <Edit2 size={16} />
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 p-2.5 rounded-lg bg-surface-alt/50 border border-border/60 text-xs">
+                    <div>
+                      <p className="text-[10px] uppercase text-text-muted font-semibold">Gross Pay</p>
+                      <p className="font-mono tabular-nums font-semibold text-primary">
+                        {formatUGX(calc.grossSalaryUgx)}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase text-text-muted font-semibold">Net Pay</p>
+                      <p className="font-mono tabular-nums font-bold text-accent">
+                        {formatUGX(calc.netPayUgx)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase text-text-muted font-semibold">URA PAYE</p>
+                      <p className="font-mono tabular-nums text-danger">{formatUGX(calc.payeTaxUgx)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase text-text-muted font-semibold">NSSF (5% / 10%)</p>
+                      <p className="font-mono tabular-nums text-text-secondary">
+                        {formatUGX(calc.nssfEmployeeUgx)} / {formatUGX(calc.nssfEmployerUgx)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[880px]">
             <thead>
               <tr className="bg-surface-alt/50 border-b border-border text-xs font-bold text-text-muted uppercase tracking-wider">
@@ -280,7 +339,46 @@ export default function Payroll() {
           <History size={18} className="text-primary" />
           <h2 className="font-bold text-primary">Processed Payroll Runs ({runs.length})</h2>
         </div>
-        <div className="overflow-x-auto">
+        <div className="md:hidden divide-y divide-border">
+          {isLoading ? (
+            <MobileListSkeleton cards={4} />
+          ) : runs.length === 0 ? (
+            <div className="px-4 py-10 text-center text-sm text-text-muted">
+              No payroll runs processed yet.
+            </div>
+          ) : (
+            runs.map((run) => (
+              <div key={run.id} className="p-4 space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold text-primary truncate">{run.periodLabel}</p>
+                    <p className="text-xs text-text-muted">
+                      {formatDate(run.createdAt)} · {run.paymentMethod} · {run.entries.length} staff
+                    </p>
+                  </div>
+                  <span className="font-mono tabular-nums font-bold text-accent text-sm shrink-0">
+                    {formatUGX(run.totalNetPayUgx)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2 text-xs text-text-secondary">
+                  <span className="font-mono tabular-nums">
+                    Gross: {formatUGX(run.totalGrossUgx)} · Tax/NSSF:{' '}
+                    {formatUGX(run.totalPayeUgx + run.totalNssfEmployeeUgx + run.totalNssfEmployerUgx)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRun(run)}
+                    className="btn btn-secondary text-xs py-1.5 px-3 min-h-[34px] whitespace-nowrap shrink-0"
+                  >
+                    View Payslips
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[760px]">
             <thead>
               <tr className="bg-surface-alt/50 border-b border-border text-xs font-bold text-text-muted uppercase tracking-wider">
@@ -294,11 +392,7 @@ export default function Payroll() {
             </thead>
             <tbody className="divide-y divide-border text-sm">
               {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-10 text-center">
-                    <div className="w-7 h-7 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-                  </td>
-                </tr>
+                <TableRowsSkeleton rows={5} columns={6} />
               ) : runs.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-10 text-center text-text-muted">
@@ -345,19 +439,22 @@ export default function Payroll() {
 
       {/* Edit Staff Salary Modal */}
       {editingMember && (
-        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white">
-              <h3 className="text-lg font-bold text-white">Salary Profile · {editingMember.name}</h3>
+        <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 no-print">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+            <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
+              <h3 className="text-lg font-bold text-white truncate pr-2">
+                Salary Profile · {editingMember.name}
+              </h3>
               <button
                 type="button"
                 onClick={() => setEditingMember(null)}
-                className="p-1 hover:bg-white/10 rounded-lg"
+                className="p-1 hover:bg-white/10 rounded-lg shrink-0"
+                aria-label="Close salary editor"
               >
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleSaveSalary} className="p-6 space-y-4">
+            <form onSubmit={handleSaveSalary} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-sm font-bold text-primary mb-1">
                   Monthly Base Salary (UGX) *
@@ -372,7 +469,7 @@ export default function Payroll() {
                   autoFocus
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-bold text-primary mb-1">URA TIN</label>
                   <input
@@ -413,8 +510,8 @@ export default function Payroll() {
 
       {/* Printable Payroll Payslips Modal */}
       {selectedRun && (
-        <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white no-print shrink-0">
               <h3 className="text-lg font-bold text-white">
                 Payroll Payslips · {selectedRun.periodLabel}

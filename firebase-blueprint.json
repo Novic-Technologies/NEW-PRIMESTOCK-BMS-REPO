@@ -35,6 +35,7 @@
         "baseSalaryUgx": { "type": "number" },
         "nssfNumber": { "type": "string", "maxLength": 64 },
         "tinNumber": { "type": "string", "maxLength": 64 },
+        "posPinHash": { "type": "string", "maxLength": 64 },
         "status": { "type": "string", "enum": ["active", "inactive"] },
         "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
@@ -158,6 +159,8 @@
         "reference": { "type": "string", "maxLength": 64 },
         "customerId": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "maxLength": 128 },
+        "cashierId": { "type": "string", "maxLength": 128 },
+        "cashierName": { "type": "string", "maxLength": 120 },
         "subtotal": { "type": "number" },
         "discount": { "type": "number" },
         "taxAmount": { "type": "number" },
@@ -315,6 +318,8 @@
         "payerPhone": { "type": "string", "maxLength": 30 },
         "status": { "type": "string", "maxLength": 32 },
         "reference": { "type": "string", "maxLength": 128 },
+        "gatewayVerified": { "type": "boolean" },
+        "gatewayTxId": { "type": "string", "maxLength": 128 },
         "reviewedBy": { "type": "string", "maxLength": 128 },
         "reviewedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
         "rejectionReason": { "type": "string", "maxLength": 300 },
@@ -465,9 +470,44 @@
         "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["hash", "tenantId", "type", "createdAt"]
+    },
+    "PlatformBillingConfig": {
+      "title": "PlatformBillingConfig",
+      "description": "Platform-wide subscription payment channels and billing instructions configured by the Master Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "channels": { "type": "array" },
+        "supportPhone": { "type": "string", "maxLength": 40 },
+        "supportEmail": { "type": "string", "maxLength": 254 },
+        "supportWhatsapp": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "channels", "updatedAt"]
+    },
+    "PlatformPlansConfig": {
+      "title": "PlatformPlansConfig",
+      "description": "Centralized subscription tier quotas, feature gates, trial settings, and allowed upgrade paths configured by Master Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "defaultSignupPlan": { "type": "string", "enum": ["micro", "starter", "business", "enterprise"] },
+        "trialDays": { "type": "number" },
+        "reminderLeadDays": { "type": "number" },
+        "strictEnforcement": { "type": "boolean" },
+        "autoLockExpired": { "type": "boolean" },
+        "multiMonthDiscounts": { "type": "object" },
+        "upgradeHeadline": { "type": "string", "maxLength": 240 },
+        "tiers": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "defaultSignupPlan", "trialDays", "reminderLeadDays", "strictEnforcement", "autoLockExpired", "multiMonthDiscounts", "tiers", "updatedAt"]
     }
   },
   "firestore": {
+    "platformConfig/{configId}": { "schema": "PlatformBillingConfig", "description": "Platform-wide configuration documents (billing & plans) managed by Master Admin" },
     "tenants/{tenantId}": { "schema": "Tenant", "description": "Tenant configuration" },
     "users/{userId}": { "schema": "User", "description": "User profiles" },
     "staffInvites/{inviteId}": { "schema": "StaffInvite", "description": "Staff workspace invitations" },

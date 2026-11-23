@@ -276,5 +276,131 @@ export function useCustomers() {
     }
   };
 
-  return { customers, isLoading, addCustomer, updateCustomer, deleteCustomer };
+  const bulkImportCustomers = async (
+    rows: Array<{
+      name: string;
+      phone: string;
+      email?: string;
+      address?: string;
+      type?: Customer['type'];
+      creditLimit?: number;
+      currentBalance?: number;
+      loyaltyPoints?: number;
+    }>
+  ): Promise<number> => {
+    if (!tenant) return 0;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return 0;
+    }
+
+    const existingCustomers = await localDb.customers.where('tenantId').equals(tenant.id).toArray();
+    const usedEmails = new Set(
+      existingCustomers.map((c) => (c.email || '').trim().toLowerCase()).filter(Boolean)
+    );
+
+    const nowIso = new Date().toISOString();
+    const toCreate: Customer[] = [];
+    let skippedConflicts = 0;
+
+    for (const row of rows) {
+      const name = String(row.name || '').trim().slice(0, 150);
+      const phone = String(row.phone || '').trim().slice(0, 30);
+      if (!name || phone.length < 10) continue;
+
+      const cleanEmail = String(row.email || '').trim().toLowerCase().slice(0, 254);
+      if (cleanEmail && usedEmails.has(cleanEmail)) {
+        skippedConflicts++;
+        continue;
+      }
+      if (cleanEmail) usedEmails.add(cleanEmail);
+
+      const type: Customer['type'] =
+        row.type && ['Individual', 'Business', 'Wholesale', 'VIP'].includes(row.type)
+          ? row.type
+          : 'Individual';
+
+      toCreate.push(
+        stripUndefined({
+          id: crypto.randomUUID(),
+          tenantId: tenant.id,
+          name,
+          phone,
+          email: cleanEmail || undefined,
+          address: row.address ? String(row.address).trim().slice(0, 250) : undefined,
+          type,
+          creditLimit: Math.max(0, Number(row.creditLimit) || 0),
+          currentBalance: Math.max(0, Number(row.currentBalance) || 0),
+          loyaltyPoints: Math.max(0, Math.round(Number(row.loyaltyPoints) || 0)),
+          createdAt: nowIso,
+        })
+      );
+    }
+
+    if (toCreate.length === 0) {
+      toast.error(
+        skippedConflicts > 0
+          ? 'Skipped rows with duplicate emails or invalid phone numbers (min 10 digits).'
+          : 'No valid customer rows to import (name and 10+ digit phone required).'
+      );
+      return 0;
+    }
+
+    await localDb.customers.bulkPut(toCreate);
+    if (navigator.onLine) {
+      const CHUNK_SIZE = 12;
+      for (let i = 0; i < toCreate.length; i += CHUNK_SIZE) {
+        const chunk = toCreate.slice(i, i + CHUNK_SIZE);
+        await Promise.all(
+          chunk.map(async (cust) => {
+            try {
+              await setDoc(doc(db, `tenants/${tenant.id}/customers`, cust.id), cust);
+            } catch {
+              await localDb.syncQueue.add({
+                tenantId: tenant.id,
+                table: 'customers',
+                action: 'create',
+                data: cust,
+                status: 'pending',
+                createdAt: Date.now(),
+              });
+            }
+          })
+        );
+      }
+    } else {
+      await localDb.syncQueue.bulkAdd(
+        toCreate.map((cust) => ({
+          tenantId: tenant.id,
+          table: 'customers' as const,
+          action: 'create' as const,
+          data: cust,
+          status: 'pending' as const,
+          createdAt: Date.now(),
+        }))
+      );
+    }
+
+    if (user) {
+      void logWorkspaceAudit({
+        tenantId: tenant.id,
+        branchId: user.branchId,
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        action: 'CUSTOMER_BULK_IMPORT',
+        entityType: 'customer',
+        summary: `Imported ${toCreate.length} customer(s) via Smart Import`,
+      });
+    }
+
+    toast.success(
+      `Imported ${toCreate.length} customer${toCreate.length === 1 ? '' : 's'}${
+        skippedConflicts > 0 ? ` (${skippedConflicts} duplicate email skipped)` : ''
+      }`
+    );
+    return toCreate.length;
+  };
+
+  return { customers, isLoading, addCustomer, bulkImportCustomers, updateCustomer, deleteCustomer };
 }

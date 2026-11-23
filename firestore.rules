@@ -54,6 +54,10 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/tenants/$(tenantId)).data;
     }
 
+    function tenantPlan(tenantId) {
+      return tenantDocData(tenantId).plan;
+    }
+
     function belongsToTenant(tenantId) {
       return isAuthenticated() &&
         isValidId(tenantId) &&
@@ -108,11 +112,11 @@ service cloud.firestore {
     function isValidSectionsList(sections) {
       return sections is list &&
         sections.size() >= 1 &&
-        sections.size() <= 15 &&
+        sections.size() <= 16 &&
         sections.hasOnly([
           'dashboard', 'pos', 'sales', 'inventory', 'purchases',
           'customers', 'suppliers', 'finance', 'payroll', 'reports',
-          'shifts', 'ai', 'team', 'billing', 'settings'
+          'shifts', 'bulk_import', 'ai', 'team', 'billing', 'settings'
         ]);
     }
 
@@ -151,7 +155,7 @@ service cloud.firestore {
 
     function isValidTenantMember(data, tenantId) {
       return data.keys().hasAll(['uid', 'tenantId', 'name', 'email', 'role', 'status', 'createdAt']) &&
-        data.keys().hasOnly(['uid', 'tenantId', 'name', 'email', 'phone', 'role', 'allowedSections', 'branchId', 'baseSalaryUgx', 'nssfNumber', 'tinNumber', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'tenantId', 'name', 'email', 'phone', 'role', 'allowedSections', 'branchId', 'baseSalaryUgx', 'nssfNumber', 'tinNumber', 'posPinHash', 'status', 'createdAt']) &&
         isValidId(data.uid) &&
         data.tenantId == tenantId &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
@@ -164,7 +168,8 @@ service cloud.firestore {
         (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
         (!('baseSalaryUgx' in data) || (data.baseSalaryUgx is number && data.baseSalaryUgx >= 0)) &&
         (!('nssfNumber' in data) || (data.nssfNumber is string && data.nssfNumber.size() <= 64)) &&
-        (!('tinNumber' in data) || (data.tinNumber is string && data.tinNumber.size() <= 64));
+        (!('tinNumber' in data) || (data.tinNumber is string && data.tinNumber.size() <= 64)) &&
+        (!('posPinHash' in data) || (data.posPinHash is string && data.posPinHash.matches('^[a-f0-9]{64}$')));
     }
 
     function isValidStaffInvite(data) {
@@ -273,7 +278,7 @@ service cloud.firestore {
 
     function isValidSale(data, tenantId) {
       return data.keys().hasAll(['id', 'tenantId', 'total', 'paymentMethod', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'branchName', 'shiftId', 'reference', 'customerId', 'userId', 'items', 'subtotal', 'discount', 'taxAmount', 'taxRate', 'total', 'paymentMethod', 'paymentProvider', 'paymentReference', 'payerPhone', 'cashTendered', 'changeGiven', 'splitPayments', 'status', 'refundedAt', 'refundReason', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'branchName', 'shiftId', 'reference', 'customerId', 'userId', 'cashierId', 'cashierName', 'items', 'subtotal', 'discount', 'taxAmount', 'taxRate', 'total', 'paymentMethod', 'paymentProvider', 'paymentReference', 'payerPhone', 'cashTendered', 'changeGiven', 'splitPayments', 'status', 'refundedAt', 'refundReason', 'createdAt']) &&
         isValidId(data.id) &&
         data.tenantId == tenantId &&
         data.total is number && data.total >= 0 &&
@@ -285,6 +290,8 @@ service cloud.firestore {
         (!('cashTendered' in data) || (data.cashTendered is number && data.cashTendered >= 0)) &&
         (!('changeGiven' in data) || (data.changeGiven is number && data.changeGiven >= 0)) &&
         (!('userId' in data) || isValidId(data.userId)) &&
+        (!('cashierId' in data) || isValidId(data.cashierId)) &&
+        (!('cashierName' in data) || (data.cashierName is string && data.cashierName.size() <= 120)) &&
         (!('customerId' in data) || (data.customerId is string && data.customerId.size() <= 128)) &&
         (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
         (!('branchName' in data) || (data.branchName is string && data.branchName.size() <= 120)) &&
@@ -409,7 +416,7 @@ service cloud.firestore {
 
     function isValidBillingHistory(data, tenantId) {
       return data.keys().hasAll(['id', 'tenantId', 'amount', 'status', 'reference', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'tenantId', 'plan', 'amount', 'paymentMethod', 'provider', 'payerPhone', 'status', 'reference', 'reviewedBy', 'reviewedAt', 'rejectionReason', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'plan', 'amount', 'paymentMethod', 'provider', 'payerPhone', 'status', 'reference', 'gatewayVerified', 'gatewayTxId', 'reviewedBy', 'reviewedAt', 'rejectionReason', 'createdAt']) &&
         isValidId(data.id) &&
         data.tenantId == tenantId &&
         data.amount is number && data.amount >= 0 &&
@@ -420,6 +427,8 @@ service cloud.firestore {
         (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod.size() <= 64)) &&
         (!('provider' in data) || (data.provider is string && data.provider.size() <= 40)) &&
         (!('payerPhone' in data) || (data.payerPhone is string && data.payerPhone.size() <= 30)) &&
+        (!('gatewayVerified' in data) || data.gatewayVerified is bool) &&
+        (!('gatewayTxId' in data) || (data.gatewayTxId is string && data.gatewayTxId.size() <= 128)) &&
         (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 128)) &&
         (!('reviewedAt' in data) || (data.reviewedAt is string && data.reviewedAt.size() <= 64)) &&
         (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 300));
@@ -537,9 +546,68 @@ service cloud.firestore {
         data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64;
     }
 
+    function isValidPlatformBillingConfig(data, configId) {
+      return data.keys().hasAll(['id', 'channels', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'channels', 'supportPhone', 'supportEmail', 'supportWhatsapp', 'updatedAt', 'updatedBy']) &&
+        data.id == configId &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 64 &&
+        data.channels is list &&
+        data.channels.size() >= 1 &&
+        data.channels.size() <= 15 &&
+        (!('supportPhone' in data) || (data.supportPhone is string && data.supportPhone.size() <= 40)) &&
+        (!('supportEmail' in data) || (data.supportEmail is string && data.supportEmail.size() <= 254)) &&
+        (!('supportWhatsapp' in data) || (data.supportWhatsapp is string && data.supportWhatsapp.size() <= 40)) &&
+        data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64 &&
+        (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128));
+    }
+
+    function isValidPlatformPlansConfig(data, configId) {
+      return configId == 'plans' &&
+        data.keys().hasAll([
+          'id', 'defaultSignupPlan', 'trialDays', 'reminderLeadDays',
+          'strictEnforcement', 'autoLockExpired', 'multiMonthDiscounts', 'tiers', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'defaultSignupPlan', 'trialDays', 'reminderLeadDays',
+          'strictEnforcement', 'autoLockExpired', 'multiMonthDiscounts', 'upgradeHeadline',
+          'tiers', 'updatedAt', 'updatedBy'
+        ]) &&
+        data.id == 'plans' &&
+        data.defaultSignupPlan in ['micro', 'starter', 'business', 'enterprise'] &&
+        data.trialDays is number && data.trialDays >= 1 && data.trialDays <= 90 &&
+        data.reminderLeadDays is number && data.reminderLeadDays >= 1 && data.reminderLeadDays <= 30 &&
+        data.strictEnforcement is bool &&
+        data.autoLockExpired is bool &&
+        data.multiMonthDiscounts is map &&
+        data.tiers is map &&
+        data.tiers.keys().hasAll(['micro', 'starter', 'business', 'enterprise']) &&
+        (!('upgradeHeadline' in data) || (data.upgradeHeadline is string && data.upgradeHeadline.size() <= 240)) &&
+        data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64 &&
+        (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128));
+    }
+
     // ===============================================================
     // Collection Rules
     // ===============================================================
+
+    match /platformConfig/{configId} {
+      allow get: if isValidId(configId) && isAuthenticated();
+      allow list: if isMasterAdmin();
+      allow create: if isValidId(configId) &&
+        isMasterAdmin() &&
+        (
+          (configId == 'billing' && isValidPlatformBillingConfig(incoming(), configId)) ||
+          (configId == 'plans' && isValidPlatformPlansConfig(incoming(), configId))
+        );
+      allow update: if isValidId(configId) &&
+        isMasterAdmin() &&
+        incoming().id == existing().id &&
+        (
+          (configId == 'billing' && isValidPlatformBillingConfig(incoming(), configId)) ||
+          (configId == 'plans' && isValidPlatformPlansConfig(incoming(), configId))
+        );
+      allow delete: if isValidId(configId) && isMasterAdmin();
+    }
 
     match /masterAdmins/{adminId} {
       allow get: if isValidId(adminId) && (isOwner(adminId) || isMasterAdmin());
@@ -606,7 +674,7 @@ service cloud.firestore {
            incoming().role == existing().role &&
            incoming().status == existing().status &&
            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'branchId'])) ||
-          (isTenantAdmin(existing().tenantId) &&
+          ((isTenantAdmin(existing().tenantId) || isMasterAdmin()) &&
            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'allowedSections', 'branchId', 'status']))
         );
     }
@@ -614,9 +682,10 @@ service cloud.firestore {
     match /staffInvites/{inviteId} {
       allow get: if isValidId(inviteId) &&
         isAuthenticated() &&
-        (existing().email.lower() == authEmailLower() || existing().invitedBy == request.auth.uid || isTenantAdmin(existing().tenantId));
+        (isMasterAdmin() || existing().email.lower() == authEmailLower() || existing().invitedBy == request.auth.uid || isTenantAdmin(existing().tenantId));
       allow list: if isAuthenticated() &&
-        (resource.data.email.lower() == authEmailLower() ||
+        (isMasterAdmin() ||
+         resource.data.email.lower() == authEmailLower() ||
          resource.data.invitedBy == request.auth.uid ||
          isTenantAdmin(resource.data.tenantId));
       allow create: if isValidId(inviteId) &&
@@ -631,6 +700,7 @@ service cloud.firestore {
         incoming().tenantId == existing().tenantId &&
         incoming().createdAt == existing().createdAt &&
         (
+          isMasterAdmin() ||
           isTenantAdmin(existing().tenantId) ||
           (isAuthenticated() &&
            existing().email.lower() == authEmailLower() &&
@@ -638,7 +708,7 @@ service cloud.firestore {
            incoming().status == 'accepted' &&
            incoming().diff(existing()).affectedKeys().hasOnly(['status']))
         );
-      allow delete: if isValidId(inviteId) && isTenantAdmin(existing().tenantId);
+      allow delete: if isValidId(inviteId) && (isMasterAdmin() || isTenantAdmin(existing().tenantId));
     }
 
     match /tenants/{tenantId} {
@@ -648,7 +718,12 @@ service cloud.firestore {
         isValidId(tenantId) &&
         isValidTenant(incoming()) &&
         incoming().id == tenantId &&
-        incoming().plan == 'micro' &&
+        (
+          (exists(/databases/$(database)/documents/platformConfig/plans) &&
+           incoming().plan == get(/databases/$(database)/documents/platformConfig/plans).data.defaultSignupPlan) ||
+          (!exists(/databases/$(database)/documents/platformConfig/plans) &&
+           incoming().plan == 'micro')
+        ) &&
         incoming().status == 'trial' &&
         !('isComplimentary' in incoming()) &&
         !userExists() &&
@@ -691,11 +766,12 @@ service cloud.firestore {
           incoming().tenantId == existing().tenantId &&
           incoming().createdAt == existing().createdAt &&
           (
+            isMasterAdmin() ||
             isTenantAdmin(tenantId) ||
             (isOwner(memberId) &&
              incoming().role == existing().role &&
              incoming().status == existing().status &&
-             incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'branchId']))
+             incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'branchId', 'posPinHash']))
           );
         allow delete: if isValidId(memberId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
@@ -707,7 +783,9 @@ service cloud.firestore {
           isValidBranch(incoming(), tenantId) &&
           incoming().id == branchId &&
           (
-            (isTenantManagerOrAdmin(tenantId) && tenantNotSuspended(tenantId)) ||
+            (isTenantManagerOrAdmin(tenantId) &&
+             tenantNotSuspended(tenantId) &&
+             tenantPlan(tenantId) in ['business', 'enterprise']) ||
             (isAuthenticated() &&
              !userExists() &&
              getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == tenantId &&
@@ -721,12 +799,12 @@ service cloud.firestore {
           incoming().id == existing().id &&
           incoming().tenantId == existing().tenantId &&
           incoming().createdAt == existing().createdAt;
-        allow delete: if isValidId(branchId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(branchId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /products/{productId} {
-        allow get: if isValidId(productId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(productId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(productId) &&
           canManageInventory(tenantId) &&
           tenantNotSuspended(tenantId) &&
@@ -742,12 +820,12 @@ service cloud.firestore {
             canManageInventory(tenantId) ||
             (belongsToTenant(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['currentStock', 'branchStock']))
           );
-        allow delete: if isValidId(productId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(productId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /sales/{saleId} {
-        allow get: if isValidId(saleId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(saleId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(saleId) &&
           belongsToTenant(tenantId) &&
           tenantNotSuspended(tenantId) &&
@@ -761,12 +839,12 @@ service cloud.firestore {
           incoming().id == existing().id &&
           incoming().tenantId == existing().tenantId &&
           incoming().createdAt == existing().createdAt;
-        allow delete: if isValidId(saleId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(saleId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /shifts/{shiftId} {
-        allow get: if isValidId(shiftId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(shiftId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(shiftId) &&
           belongsToTenant(tenantId) &&
           tenantNotSuspended(tenantId) &&
@@ -781,59 +859,63 @@ service cloud.firestore {
           incoming().tenantId == existing().tenantId &&
           incoming().openedAt == existing().openedAt &&
           (isTenantManagerOrAdmin(tenantId) || existing().userId == request.auth.uid);
-        allow delete: if isValidId(shiftId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(shiftId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /purchaseOrders/{poId} {
-        allow get: if isValidId(poId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(poId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(poId) &&
           canManageInventory(tenantId) &&
           tenantNotSuspended(tenantId) &&
+          tenantPlan(tenantId) in ['starter', 'business', 'enterprise'] &&
           isValidPurchaseOrder(incoming(), tenantId) &&
           incoming().id == poId;
         allow update: if isValidId(poId) &&
           canManageInventory(tenantId) &&
           tenantNotSuspended(tenantId) &&
+          tenantPlan(tenantId) in ['starter', 'business', 'enterprise'] &&
           isValidPurchaseOrder(incoming(), tenantId) &&
           incoming().id == existing().id &&
           incoming().tenantId == existing().tenantId &&
           incoming().createdAt == existing().createdAt;
-        allow delete: if isValidId(poId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(poId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /creditPayments/{paymentId} {
-        allow get: if isValidId(paymentId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(paymentId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(paymentId) &&
           belongsToTenant(tenantId) &&
           tenantNotSuspended(tenantId) &&
           isValidCreditPayment(incoming(), tenantId) &&
           incoming().id == paymentId;
-        allow delete: if isValidId(paymentId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(paymentId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /suppliers/{supplierId} {
-        allow get: if isValidId(supplierId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(supplierId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(supplierId) &&
           belongsToTenant(tenantId) &&
           tenantNotSuspended(tenantId) &&
+          tenantPlan(tenantId) in ['starter', 'business', 'enterprise'] &&
           isValidSupplier(incoming(), tenantId) &&
           incoming().id == supplierId;
         allow update: if isValidId(supplierId) &&
           belongsToTenant(tenantId) &&
           tenantNotSuspended(tenantId) &&
+          tenantPlan(tenantId) in ['starter', 'business', 'enterprise'] &&
           isValidSupplier(incoming(), tenantId) &&
           incoming().id == existing().id &&
           incoming().tenantId == existing().tenantId &&
           incoming().createdAt == existing().createdAt;
-        allow delete: if isValidId(supplierId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(supplierId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /customers/{customerId} {
-        allow get: if isValidId(customerId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(customerId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(customerId) &&
           belongsToTenant(tenantId) &&
           tenantNotSuspended(tenantId) &&
@@ -846,12 +928,12 @@ service cloud.firestore {
           incoming().id == existing().id &&
           incoming().tenantId == existing().tenantId &&
           incoming().createdAt == existing().createdAt;
-        allow delete: if isValidId(customerId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(customerId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /expenses/{expenseId} {
-        allow get: if isValidId(expenseId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(expenseId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(expenseId) &&
           belongsToTenant(tenantId) &&
           tenantNotSuspended(tenantId) &&
@@ -865,7 +947,7 @@ service cloud.firestore {
           incoming().id == existing().id &&
           incoming().tenantId == existing().tenantId &&
           incoming().createdAt == existing().createdAt;
-        allow delete: if isValidId(expenseId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(expenseId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /billingHistory/{historyId} {
@@ -926,44 +1008,46 @@ service cloud.firestore {
       }
 
       match /stockTransfers/{transferId} {
-        allow get: if isValidId(transferId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(transferId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(transferId) &&
           canManageInventory(tenantId) &&
           tenantNotSuspended(tenantId) &&
+          tenantPlan(tenantId) in ['business', 'enterprise'] &&
           isValidStockTransfer(incoming(), tenantId) &&
           incoming().id == transferId &&
           incoming().transferredBy == request.auth.uid;
-        allow delete: if isValidId(transferId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(transferId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /stockAdjustments/{adjustmentId} {
-        allow get: if isValidId(adjustmentId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(adjustmentId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(adjustmentId) &&
           canManageInventory(tenantId) &&
           tenantNotSuspended(tenantId) &&
           isValidStockAdjustment(incoming(), tenantId) &&
           incoming().id == adjustmentId &&
           incoming().adjustedBy == request.auth.uid;
-        allow delete: if isValidId(adjustmentId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(adjustmentId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /payrollRuns/{payrollId} {
-        allow get: if isValidId(payrollId) && canAccessFinance(tenantId);
-        allow list: if canAccessFinance(tenantId);
+        allow get: if isValidId(payrollId) && (canAccessFinance(tenantId) || isMasterAdmin());
+        allow list: if canAccessFinance(tenantId) || isMasterAdmin();
         allow create: if isValidId(payrollId) &&
           (isTenantAdmin(tenantId) || (canAccessFinance(tenantId) && userData().role == 'accountant')) &&
           tenantNotSuspended(tenantId) &&
+          tenantPlan(tenantId) in ['business', 'enterprise'] &&
           isValidPayrollRun(incoming(), tenantId) &&
           incoming().id == payrollId &&
           incoming().processedBy == request.auth.uid;
-        allow delete: if isValidId(payrollId) && isTenantAdmin(tenantId);
+        allow delete: if isValidId(payrollId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
       match /auditLogs/{logId} {
-        allow get: if isValidId(logId) && (isTenantManagerOrAdmin(tenantId) || canAccessFinance(tenantId));
-        allow list: if isTenantManagerOrAdmin(tenantId) || canAccessFinance(tenantId);
+        allow get: if isValidId(logId) && (isMasterAdmin() || isTenantManagerOrAdmin(tenantId) || canAccessFinance(tenantId));
+        allow list: if isMasterAdmin() || isTenantManagerOrAdmin(tenantId) || canAccessFinance(tenantId);
         allow create: if isValidId(logId) &&
           belongsToTenant(tenantId) &&
           isValidAuditLog(incoming(), tenantId) &&
@@ -973,15 +1057,15 @@ service cloud.firestore {
       }
 
       match /aiChats/{chatId} {
-        allow get: if isValidId(chatId) && belongsToTenant(tenantId);
-        allow list: if belongsToTenant(tenantId);
+        allow get: if isValidId(chatId) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(chatId) &&
           belongsToTenant(tenantId) &&
           isValidAIChatMessage(incoming(), tenantId) &&
           incoming().id == chatId &&
           incoming().userId == request.auth.uid;
-        allow delete: if isValidId(chatId) && belongsToTenant(tenantId) &&
-          (existing().userId == request.auth.uid || isTenantAdmin(tenantId));
+        allow delete: if isValidId(chatId) &&
+          (isMasterAdmin() || (belongsToTenant(tenantId) && (existing().userId == request.auth.uid || isTenantAdmin(tenantId))));
       }
     }
 

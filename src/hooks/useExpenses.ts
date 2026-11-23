@@ -180,5 +180,97 @@ export function useExpenses() {
     }
   };
 
-  return { expenses, isLoading, addExpense, deleteExpense };
+  const bulkImportExpenses = async (
+    rows: Array<{
+      expenseDate?: string;
+      category?: string;
+      description: string;
+      amount: number;
+      paymentMethod?: string;
+    }>
+  ): Promise<number> => {
+    if (!tenant || !user) return 0;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing to record expenses.');
+      return 0;
+    }
+
+    const targetBranch =
+      activeBranchId && activeBranchId !== 'ALL' ? activeBranchId : user.branchId || undefined;
+    const nowIso = new Date().toISOString();
+    const todayDate = nowIso.split('T')[0];
+
+    const toCreate: Expense[] = rows
+      .filter((r) => String(r.description || '').trim().length > 0 && Number(r.amount) > 0)
+      .map((r) =>
+        stripUndefined({
+          id: crypto.randomUUID(),
+          tenantId: tenant.id,
+          branchId: targetBranch,
+          category: String(r.category || 'General').trim().slice(0, 80) || 'General',
+          description: String(r.description).trim().slice(0, 300),
+          amount: Math.max(1, Math.round(Number(r.amount))),
+          paymentMethod: String(r.paymentMethod || 'Cash').trim().slice(0, 64) || 'Cash',
+          expenseDate: String(r.expenseDate || todayDate).trim().slice(0, 64) || todayDate,
+          recordedBy: user.uid,
+          createdAt: nowIso,
+        })
+      );
+
+    if (toCreate.length === 0) {
+      toast.error('No valid expense rows found (description and amount > 0 required).');
+      return 0;
+    }
+
+    await localDb.expenses.bulkPut(toCreate);
+    if (navigator.onLine) {
+      const CHUNK_SIZE = 12;
+      for (let i = 0; i < toCreate.length; i += CHUNK_SIZE) {
+        const chunk = toCreate.slice(i, i + CHUNK_SIZE);
+        await Promise.all(
+          chunk.map(async (expense) => {
+            try {
+              await setDoc(doc(db, `tenants/${tenant.id}/expenses`, expense.id), expense);
+            } catch {
+              await localDb.syncQueue.add({
+                tenantId: tenant.id,
+                table: 'expenses',
+                action: 'create',
+                data: expense,
+                status: 'pending',
+                createdAt: Date.now(),
+              });
+            }
+          })
+        );
+      }
+    } else {
+      await localDb.syncQueue.bulkAdd(
+        toCreate.map((expense) => ({
+          tenantId: tenant.id,
+          table: 'expenses' as const,
+          action: 'create' as const,
+          data: expense,
+          status: 'pending' as const,
+          createdAt: Date.now(),
+        }))
+      );
+    }
+
+    void logWorkspaceAudit({
+      tenantId: tenant.id,
+      branchId: targetBranch,
+      actorId: user.uid,
+      actorName: user.name,
+      actorRole: user.role,
+      action: 'EXPENSE_BULK_IMPORT',
+      entityType: 'expense',
+      summary: `Imported ${toCreate.length} expense record(s) via Smart Import`,
+    });
+
+    toast.success(`Imported ${toCreate.length} expense record${toCreate.length === 1 ? '' : 's'}`);
+    return toCreate.length;
+  };
+
+  return { expenses, isLoading, addExpense, bulkImportExpenses, deleteExpense };
 }

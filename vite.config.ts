@@ -15,7 +15,7 @@ export default defineConfig(() => {
           enabled: true,
         },
         includeAssets: [
-          'icon.svg',
+          'assets/aistudio/Minimalist_Navy_Monogram_Emblem_804982e2.png',
           'apple-touch-icon.png',
           'pwa-192x192.png',
           'pwa-512x512.png',
@@ -25,8 +25,8 @@ export default defineConfig(() => {
           name: 'PRIMESTOCK BMS UG',
           short_name: 'PrimeStock',
           description: 'Offline-first Ugandan Business Management, POS & URA Compliance System.',
-          theme_color: '#0F172A',
-          background_color: '#F7F9FC',
+          theme_color: '#0B1F3A',
+          background_color: '#EDF1F6',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -83,6 +83,37 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+      },
+    },
+    build: {
+      chunkSizeWarningLimit: 1200,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (
+              id.includes('/react/') ||
+              id.includes('/react-dom/') ||
+              id.includes('/react-router') ||
+              id.includes('/scheduler/')
+            ) {
+              return 'vendor-react';
+            }
+            if (id.includes('/firebase/') || id.includes('/@firebase/')) {
+              return 'vendor-firebase';
+            }
+            if (id.includes('/recharts/') || id.includes('/d3-')) {
+              return 'vendor-charts';
+            }
+            if (id.includes('/lucide-react/')) {
+              return 'vendor-icons';
+            }
+            if (id.includes('/dexie')) {
+              return 'vendor-dexie';
+            }
+            return undefined;
+          },
+        },
       },
     },
     server: {

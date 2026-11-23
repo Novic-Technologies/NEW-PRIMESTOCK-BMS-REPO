@@ -5,10 +5,11 @@ import { useAuthStore } from '../../store/authStore';
 import {
   canAccessFeature,
   FEATURE_LABELS,
-  FEATURE_MIN_PLAN,
+  getFeatureMinPlan,
   getPlanQuota,
   TierFeatureKey,
 } from '../../utils/planLimits';
+import { usePlatformPlansConfig } from '../../utils/platformPlans';
 import { formatUGX } from '../../utils/format';
 
 interface TierGateProps {
@@ -18,12 +19,14 @@ interface TierGateProps {
 
 export function TierGate({ feature, children }: TierGateProps) {
   const { tenant } = useAuthStore();
+  // Subscribe reactively to central platformConfig/plans updates
+  usePlatformPlansConfig();
 
   if (canAccessFeature(tenant, feature)) {
     return <>{children}</>;
   }
 
-  const minPlanKey = FEATURE_MIN_PLAN[feature];
+  const minPlanKey = getFeatureMinPlan(feature);
   const minPlan = getPlanQuota(minPlanKey);
   const currentPlan = getPlanQuota(tenant?.plan);
 

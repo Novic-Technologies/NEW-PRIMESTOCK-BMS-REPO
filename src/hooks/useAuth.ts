@@ -31,13 +31,15 @@ import {
 import { auth, db } from '../firebase';
 import { clearAllLocalData } from '../services/db';
 import { useAuthStore } from '../store/authStore';
-import { AppNotification, Branch, StaffInvite, Tenant, TenantMember, User } from '../types';
+import { AppNotification, Branch, PlatformPlansConfig, StaffInvite, Tenant, TenantMember, User } from '../types';
 import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { isMasterEmail } from '../utils/masterAdmin';
 import { applyTenantTheme } from '../utils/branding';
 import { formatDate } from '../utils/format';
 import { hashEmailForRegistry } from '../utils/rbac';
+import { getDefaultSignupPlan, getPlanQuota, getTrialDaysCount } from '../utils/planLimits';
+import { setSyncedPlatformPlansConfig } from '../utils/platformPlans';
 import { buildSubscriptionEmailHtml, sendTransactionalEmail } from '../services/notificationService';
 import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
@@ -49,7 +51,7 @@ interface PendingSignupInfo {
 
 interface CachedSession {
   user: User;
-  tenant: Tenant;
+  tenant: Tenant | null;
   isMasterAdmin: boolean;
 }
 
@@ -102,9 +104,16 @@ function clearWorkspaceStorageKeys(uid?: string | null, tenantId?: string | null
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k) continue;
+      const isNotifKey =
+        k.startsWith('primestock_notif_read_') ||
+        k.startsWith('primestock_notif_deleted_') ||
+        k.startsWith('primestock_notif_del_') ||
+        k.startsWith('primestock_notif_seen_badge_');
+      const matchesScope =
+        (uid && k.endsWith(`_${uid}`)) ||
+        (tenantId && (k.includes(`_${tenantId}_`) || k.endsWith(`_${tenantId}`)));
       if (
-        (uid && k.startsWith(`primestock_notif_read_${uid}_`)) ||
-        (uid && k.startsWith(`primestock_notif_del_${uid}_`)) ||
+        (isNotifKey && matchesScope) ||
         (tenantId && k.startsWith(`primestock_pos_held_carts_${tenantId}`))
       ) {
         keysToRemove.push(k);
@@ -123,7 +132,7 @@ function readCachedSession(uid: string): CachedSession | null {
     const raw = localStorage.getItem(`${SESSION_CACHE_PREFIX}${uid}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedSession;
-    if (parsed?.user?.uid === uid && parsed?.tenant?.id) {
+    if (parsed?.user?.uid === uid && (parsed?.tenant?.id || parsed?.isMasterAdmin)) {
       return parsed;
     }
     return null;
@@ -243,6 +252,38 @@ async function syncAuthenticatedUser(
       firebaseUser.emailVerified && (hasMasterDoc || isMasterEmail(firebaseUser.email))
     );
     setMasterAdmin(isMaster);
+
+    // Master Admin is the platform owner — never treat or provision as a retail shop tenant
+    if (isMaster) {
+      const existingDoc = userDocResult.ok && userDocResult.docSnap.exists()
+        ? (userDocResult.docSnap.data() as User)
+        : null;
+      const masterOwnerUser: User = {
+        uid: firebaseUser.uid,
+        name: (
+          existingDoc?.name ||
+          firebaseUser.displayName?.trim() ||
+          'Platform Owner'
+        ).slice(0, 120),
+        email: (firebaseUser.email || existingDoc?.email || '').slice(0, 254),
+        role: 'admin',
+        tenantId: 'platform',
+        status: 'active',
+        createdAt: existingDoc?.createdAt || new Date().toISOString(),
+      };
+      setUser(masterOwnerUser);
+      setTenant(null);
+      setActiveBranchId(null);
+      applyTenantTheme(null);
+      setAuthError(null);
+      writeCachedSession(firebaseUser.uid, {
+        user: masterOwnerUser,
+        tenant: null,
+        isMasterAdmin: true,
+      });
+      pendingSignupInfo = null;
+      return;
+    }
 
     if (!userDocResult.ok) {
       const fetchErr = 'error' in userDocResult ? userDocResult.error : new Error('Profile fetch failed');
@@ -480,21 +521,33 @@ async function syncAuthenticatedUser(
     const defaultBranchId = crypto.randomUUID();
     const nowIso = new Date().toISOString();
 
+    try {
+      const plansSnap = await getDoc(doc(db, 'platformConfig', 'plans'));
+      if (plansSnap.exists()) {
+        setSyncedPlatformPlansConfig(plansSnap.data() as PlatformPlansConfig);
+      }
+    } catch {
+      // Fall back to default platform plan settings if unavailable
+    }
+
+    const defaultPlan = getDefaultSignupPlan();
+    const defaultQuota = getPlanQuota(defaultPlan);
+    const trialDays = getTrialDaysCount();
     const newTenant: Tenant = stripUndefined({
       id: newTenantId,
       name: businessName,
       ownerEmail: firebaseUser.email ? firebaseUser.email.slice(0, 254) : undefined,
       ownerName: displayName,
-      plan: 'micro',
+      plan: defaultPlan,
       status: 'trial',
-      trialEndsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      trialEndsAt: new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000).toISOString(),
       createdAt: nowIso,
       preferences: {
         taxEnabled: false,
         taxRate: 18,
         taxInclusive: true,
         mtnMomoEnabled: true,
-        whatsappReceipts: true,
+        whatsappReceipts: false,
       },
     });
 
@@ -502,7 +555,7 @@ async function syncAuthenticatedUser(
       id: defaultBranchId,
       tenantId: newTenantId,
       name: 'Main Branch',
-      location: 'Kampala',
+      location: 'Headquarters',
       isDefault: true,
       status: 'active',
       createdAt: nowIso,
@@ -562,7 +615,7 @@ async function syncAuthenticatedUser(
           tenant: newTenant,
           isMasterAdmin: isMaster,
         });
-        toast.success('Welcome to PRIMESTOCK BMS! Your 14-day free trial has started.');
+        toast.success(`Welcome to PRIMESTOCK BMS! Your ${trialDays}-day free trial has started.`);
       }
 
       const regAuditId = crypto.randomUUID();
@@ -581,9 +634,9 @@ async function syncAuthenticatedUser(
       }).catch(() => {});
 
       const welcomeNotifId = `welcome_${newTenantId.slice(0, 8)}`;
-      const welcomeMsg = `Welcome ${displayName}! Your 14-day free trial for ${businessName} runs until ${formatDate(
+      const welcomeMsg = `Welcome ${displayName}! Your ${trialDays}-day free trial for ${businessName} runs until ${formatDate(
         newTenant.trialEndsAt
-      )}. Customize your logo and colors anytime in Settings.`;
+      )}. Customize your logo, colors, and primary branch address anytime in Settings and Team & Branches.`;
       const welcomeNotif: AppNotification = {
         id: welcomeNotifId,
         tenantId: newTenantId,
@@ -603,15 +656,15 @@ async function syncAuthenticatedUser(
       if (firebaseUser.email) {
         sendTransactionalEmail({
           to: firebaseUser.email,
-          subject: `Welcome to PrimeStock BMS — ${businessName} (14-Day Free Trial)`,
+          subject: `Welcome to PrimeStock BMS — ${businessName} (${trialDays}-Day Free Trial)`,
           text: `${welcomeMsg}\n\nWorkspace URL: ${
             typeof window !== 'undefined' ? window.location.origin : ''
           }`,
           html: buildSubscriptionEmailHtml({
             businessName,
-            headline: 'Your 14-Day Free Trial Has Started',
+            headline: `Your ${trialDays}-Day Free Trial Has Started`,
             message: welcomeMsg,
-            planLabel: 'Micro Trial (Full feature evaluation for 14 days)',
+            planLabel: `${defaultQuota.name} (${trialDays}-Day Free Trial)`,
             expiryLabel: formatDate(newTenant.trialEndsAt),
             actionLabel: 'Sign In to Workspace',
             actionUrl:
@@ -676,7 +729,7 @@ export function useAuthObserver() {
 
   // Real-time security listener on the signed-in user's profile: enforces immediate deactivation, role & section updates
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.uid || user.tenantId === 'platform') return;
     const unsubUser = onSnapshot(
       doc(db, 'users', user.uid),
       async (snap) => {
@@ -720,6 +773,7 @@ export function useAuthObserver() {
     return () => unsubUser();
   }, [
     user?.uid,
+    user?.tenantId,
     user?.role,
     user?.branchId,
     user?.name,
@@ -731,7 +785,7 @@ export function useAuthObserver() {
 
   // Real-time listener on tenant workspace: propagates Master Admin approvals/free grants/suspensions/reminders & White-Label branding immediately
   useEffect(() => {
-    if (!user?.tenantId) return;
+    if (!user?.tenantId || user.tenantId === 'platform') return;
     const unsubTenant = onSnapshot(
       doc(db, 'tenants', user.tenantId),
       (snap) => {
@@ -772,7 +826,7 @@ export function useAuth() {
       const credential = await signInWithPopup(auth, provider);
       await syncAuthenticatedUser(credential.user);
       const signedInUser = useAuthStore.getState().user;
-      if (signedInUser) {
+      if (signedInUser && signedInUser.tenantId !== 'platform') {
         void logWorkspaceAudit({
           tenantId: signedInUser.tenantId,
           branchId: signedInUser.branchId,
@@ -823,17 +877,19 @@ export function useAuth() {
       await syncAuthenticatedUser(credential.user);
       const signedInUser = useAuthStore.getState().user;
       if (signedInUser) {
-        void logWorkspaceAudit({
-          tenantId: signedInUser.tenantId,
-          branchId: signedInUser.branchId,
-          actorId: signedInUser.uid,
-          actorName: signedInUser.name,
-          actorRole: signedInUser.role,
-          action: 'USER_SIGNED_IN',
-          entityType: 'auth',
-          entityId: signedInUser.uid,
-          summary: `${signedInUser.name} (${signedInUser.role}) signed in with email`,
-        });
+        if (signedInUser.tenantId !== 'platform') {
+          void logWorkspaceAudit({
+            tenantId: signedInUser.tenantId,
+            branchId: signedInUser.branchId,
+            actorId: signedInUser.uid,
+            actorName: signedInUser.name,
+            actorRole: signedInUser.role,
+            action: 'USER_SIGNED_IN',
+            entityType: 'auth',
+            entityId: signedInUser.uid,
+            summary: `${signedInUser.name} (${signedInUser.role}) signed in with email`,
+          });
+        }
         return true;
       }
       return false;

@@ -2,7 +2,13 @@ import React, { useState } from 'react';
 import { Download, Share, X } from 'lucide-react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 
-export function PWAInstallButton({ compact = false }: { compact?: boolean }) {
+export function PWAInstallButton({
+  compact = false,
+  iconOnly = false,
+}: {
+  compact?: boolean;
+  iconOnly?: boolean;
+}) {
   const { canInstall, isIosDevice, isInstalled, installApp } = usePWAInstall();
   const [showIosGuide, setShowIosGuide] = useState(false);
 
@@ -13,6 +19,8 @@ export function PWAInstallButton({ compact = false }: { compact?: boolean }) {
     <>
       <button
         type="button"
+        title="Install App"
+        aria-label="Install App"
         onClick={() => {
           if (canInstall) {
             installApp();
@@ -23,11 +31,13 @@ export function PWAInstallButton({ compact = false }: { compact?: boolean }) {
         className={
           compact
             ? 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-accent/10 text-accent text-xs font-bold hover:bg-accent/20 transition-colors whitespace-nowrap shrink-0'
+            : iconOnly
+            ? 'flex items-center justify-center lg:px-0 lg:py-2.5 gap-2 px-4 py-2.5 w-full bg-accent/20 text-white hover:bg-accent/30 rounded-lg text-xs font-bold transition-colors whitespace-nowrap'
             : 'flex items-center justify-center gap-2 px-4 py-2.5 w-full bg-accent/20 text-white hover:bg-accent/30 rounded-lg text-xs font-bold transition-colors whitespace-nowrap'
         }
       >
-        <Download size={14} />
-        <span>Install App</span>
+        <Download size={14} className="shrink-0" />
+        <span className={iconOnly ? 'lg:hidden' : undefined}>Install App</span>
       </button>
 
       {showIosGuide && (

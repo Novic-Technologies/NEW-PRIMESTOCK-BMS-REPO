@@ -26,6 +26,7 @@ export type AppSection =
   | 'payroll'
   | 'reports'
   | 'shifts'
+  | 'bulk_import'
   | 'ai'
   | 'team'
   | 'billing'
@@ -57,6 +58,7 @@ export interface TenantMember {
   baseSalaryUgx?: number;
   nssfNumber?: string;
   tinNumber?: string;
+  posPinHash?: string;
   status: 'active' | 'inactive';
   createdAt: string;
 }
@@ -93,7 +95,6 @@ export interface TenantPreferences {
   airtelMerchantCode?: string;
   whatsappReceipts?: boolean;
   thermalPrinterName?: string;
-  twoFactorRequired?: boolean;
   staffPinsEnabled?: boolean;
   receiptFooter?: string;
   taxEnabled?: boolean;
@@ -108,6 +109,69 @@ export interface BillingPaymentMethod {
   accountRef: string;
   isPrimary: boolean;
   createdAt: string;
+}
+
+export interface PlatformPaymentChannelConfig {
+  id: 'mtn_momo' | 'airtel_money' | 'flutterwave' | 'bank_transfer' | string;
+  label: string;
+  paymentMethodName: string;
+  sublabel: string;
+  enabled: boolean;
+  accountName?: string;
+  accountNumber?: string;
+  bankName?: string;
+  ussdPrefix?: string;
+  instructions?: string;
+}
+
+export interface PlatformBillingConfig {
+  id: 'billing';
+  channels: PlatformPaymentChannelConfig[];
+  supportPhone?: string;
+  supportEmail?: string;
+  supportWhatsapp?: string;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export type TierFeatureKey =
+  | 'whatsappReceipts'
+  | 'suppliersAndPOs'
+  | 'advancedReports'
+  | 'multiBranchTransfers'
+  | 'payrollPayeNssf'
+  | 'aiRestockAndMargin';
+
+export interface PlatformPlanTierConfig {
+  id: Tenant['plan'];
+  name: string;
+  monthlyPriceUgx: number;
+  maxUsers: number;
+  maxProducts: number;
+  maxBranches: number;
+  aiDailyAllowance: number;
+  features: Record<TierFeatureKey, boolean>;
+  highlights: string[];
+  allowedUpgradeTargets: Array<Tenant['plan']>;
+}
+
+export interface PlatformPlansConfig {
+  id: 'plans';
+  defaultSignupPlan: Tenant['plan'];
+  trialDays: number;
+  reminderLeadDays: number;
+  strictEnforcement: boolean;
+  autoLockExpired: boolean;
+  multiMonthDiscounts: {
+    m1: number;
+    m3: number;
+    m6: number;
+    m12: number;
+  };
+  upgradeHeadline?: string;
+  tiers: Record<Tenant['plan'], PlatformPlanTierConfig>;
+  updatedAt: string;
+  updatedBy?: string;
 }
 
 export interface TenantBranding {
@@ -220,6 +284,8 @@ export interface Sale {
   reference: string;
   customerId?: string;
   userId: string;
+  cashierId?: string;
+  cashierName?: string;
   items: SaleItem[];
   subtotal: number;
   discount: number;
@@ -337,6 +403,8 @@ export interface BillingHistory {
   payerPhone?: string;
   status: string;
   reference: string;
+  gatewayVerified?: boolean;
+  gatewayTxId?: string;
   reviewedBy?: string;
   reviewedAt?: string;
   rejectionReason?: string;
@@ -516,3 +584,128 @@ export interface ScannedDocumentResult {
     total: number;
   }>;
 }
+
+export type SmartImportEntityType =
+  | 'products'
+  | 'sales'
+  | 'refunds'
+  | 'suppliers'
+  | 'customers'
+  | 'purchases'
+  | 'expenses';
+
+export interface SmartImportFieldMapping {
+  sourceHeader: string;
+  targetField: string;
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface SmartImportExtractResult {
+  entityType: SmartImportEntityType;
+  detectedEntityType?: SmartImportEntityType;
+  detectionConfidence?: 'high' | 'medium' | 'low';
+  detectionReason?: string;
+  detectedFormat: string;
+  summary: string;
+  sourceHeaders: string[];
+  fieldMappings: SmartImportFieldMapping[];
+  rows: Array<Record<string, any>>;
+  rawSpreadsheetRows?: Array<Record<string, any>>;
+  warnings: string[];
+}
+
+export interface SmartStocktakeItemResult {
+  productId: string;
+  productName: string;
+  countedQty: number;
+  systemQty: number;
+  variance: number;
+  confidence: 'high' | 'medium' | 'low';
+  notes: string;
+}
+
+export interface SmartStocktakeResult {
+  summary: string;
+  items: SmartStocktakeItemResult[];
+}
+
+export interface ParsedOrderDraftResult {
+  items: Array<{
+    productId: string;
+    productName: string;
+    quantity: number;
+    confidence: 'high' | 'medium' | 'low';
+    notes?: string;
+  }>;
+  matchedCustomerId?: string;
+  matchedCustomerName?: string;
+  paymentMethod?: string;
+  isCredit?: boolean;
+  reason: string;
+}
+
+export interface MomoMatchResult {
+  txId: string;
+  provider: string;
+  amountUgx: number;
+  payerPhone?: string;
+  payerName?: string;
+  matchType: 'pending_sale' | 'customer_credit' | 'unmatched';
+  matchedId?: string;
+  matchedLabel?: string;
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+}
+
+export interface WhatsappReplyDraftResult {
+  replyText: string;
+  language: 'en' | 'lg' | 'sw';
+  referencedProducts: Array<{
+    productName: string;
+    priceUgx: number;
+    inStock: number;
+  }>;
+  reason: string;
+}
+
+export interface InvoiceCheckResult {
+  summary: string;
+  discrepancies: Array<{
+    itemName: string;
+    poQty: number;
+    invoiceQty: number;
+    poUnitCostUgx: number;
+    invoiceUnitCostUgx: number;
+    status: 'matched' | 'overcharge' | 'short_delivery' | 'extra_item';
+    reason: string;
+  }>;
+}
+
+export interface EnrichedProductSuggestion {
+  productId?: string;
+  originalName: string;
+  standardizedName: string;
+  suggestedCategory: string;
+  suggestedSku: string;
+  suggestedUnit?: string;
+  description: string;
+  reason: string;
+}
+
+export interface GuidedSetupSuggestion {
+  businessSummary: string;
+  recommendedCategories: string[];
+  recommendedUnits: string[];
+  pricingRuleSuggestion: string;
+  roleSuggestions: Array<{ role: BusinessRole; tip: string }>;
+  reason: string;
+}
+
+export interface MasterTriageResult {
+  category: 'billing' | 'quota_upgrade' | 'technical' | 'onboarding' | 'account';
+  urgency: 'high' | 'medium' | 'low';
+  suggestedPlan?: Tenant['plan'];
+  draftReply: string;
+  reason: string;
+}
+

@@ -11,26 +11,32 @@ import {
   Trash2,
   X,
   Banknote,
+  Sparkles,
 } from 'lucide-react';
 import { useSuppliers } from '../../hooks/useSuppliers';
 import { useCreditPayments } from '../../hooks/useCreditPayments';
 import { useAuthStore } from '../../store/authStore';
 import { Supplier } from '../../types';
 import { formatDate, formatUGX } from '../../utils/format';
+import { canAccessFeature } from '../../utils/planLimits';
+import { SmartImportModal } from '../../components/shared/SmartImportModal';
+import { CardGridSkeleton } from '../../components/shared/Skeletons';
 import { cn } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
 const SUPPLIER_PAY_METHODS = ['Cash', 'MTN Mobile Money', 'Airtel Money', 'Bank Transfer', 'Card'];
 
 export default function Suppliers() {
-  const { user } = useAuthStore();
+  const { user, tenant } = useAuthStore();
   const isAdmin = user?.role === 'admin';
-  const { suppliers, loading, addSupplier, updateSupplier, deleteSupplier } = useSuppliers();
+  const { suppliers, loading, addSupplier, updateSupplier, deleteSupplier, bulkImportSuppliers } =
+    useSuppliers();
   const { payments, recordSupplierPayment } = useCreditPayments();
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [historySupplier, setHistorySupplier] = useState<Supplier | null>(null);
   const [paySupplier, setPaySupplier] = useState<Supplier | null>(null);
@@ -153,14 +159,30 @@ export default function Suppliers() {
           <h1 className="text-3xl font-bold text-primary">Suppliers</h1>
           <p className="text-text-muted text-sm mt-1">Manage your product vendors and supply chain</p>
         </div>
-        <button
-          type="button"
-          onClick={openCreateModal}
-          className="btn btn-primary gap-2 w-full sm:w-auto whitespace-nowrap"
-        >
-          <Plus size={18} />
-          Add Supplier
-        </button>
+        <div className="flex flex-wrap gap-2.5 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={() => {
+              if (!canAccessFeature(tenant, 'suppliersAndPOs')) {
+                toast.error('Suppliers & Payables require Starter plan or higher. Upgrade in Billing.');
+                return;
+              }
+              setIsImportOpen(true);
+            }}
+            className="btn btn-secondary gap-2 flex-1 sm:flex-none whitespace-nowrap"
+          >
+            <Sparkles size={17} className="text-accent" />
+            Smart Import
+          </button>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="btn btn-primary gap-2 flex-1 sm:flex-none whitespace-nowrap"
+          >
+            <Plus size={18} />
+            Add Supplier
+          </button>
+        </div>
       </div>
 
       <div className="card p-4 space-y-3">
@@ -209,12 +231,11 @@ export default function Suppliers() {
         )}
       </div>
 
+      {loading ? (
+        <CardGridSkeleton count={6} variant="supplier" />
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {loading ? (
-          Array(6)
-            .fill(0)
-            .map((_, i) => <div key={i} className="h-48 bg-surface-alt animate-pulse rounded-xl" />)
-        ) : filteredSuppliers.length > 0 ? (
+        {filteredSuppliers.length > 0 ? (
           filteredSuppliers.map((supplier) => (
             <div key={supplier.id} className="card hover:border-accent/40 transition-colors flex flex-col justify-between">
               <div>
@@ -328,12 +349,13 @@ export default function Suppliers() {
           </div>
         )}
       </div>
+      )}
 
       {/* Add/Edit Supplier Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+            <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white shrink-0">
               <h2 className="text-xl font-bold text-white">
                 {editingSupplier ? 'Edit Supplier' : 'Add New Supplier'}
               </h2>
@@ -345,7 +367,7 @@ export default function Suppliers() {
                 <X size={22} />
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label className="block text-sm font-bold text-primary mb-1">Business Name *</label>
                 <input
@@ -430,18 +452,18 @@ export default function Suppliers() {
       {/* Supplier Details Modal */}
       {historySupplier && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white">
-              <h2 className="text-lg font-bold text-white">{historySupplier.name}</h2>
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+            <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white shrink-0">
+              <h2 className="text-lg font-bold text-white truncate pr-2">{historySupplier.name}</h2>
               <button
                 type="button"
                 onClick={() => setHistorySupplier(null)}
-                className="text-white/80 hover:text-white p-1 rounded-lg"
+                className="text-white/80 hover:text-white p-1 rounded-lg shrink-0"
               >
                 <X size={20} />
               </button>
             </div>
-            <div className="p-6 space-y-3 text-sm">
+            <div className="p-6 space-y-3 text-sm overflow-y-auto flex-1">
               <div className="flex justify-between py-2 border-b border-border">
                 <span className="text-text-muted">Category</span>
                 <span className="font-semibold text-primary">{historySupplier.category}</span>
@@ -496,7 +518,7 @@ export default function Suppliers() {
                 </div>
               )}
             </div>
-            <div className="p-4 bg-surface-alt border-t border-border flex justify-between gap-3">
+            <div className="p-4 bg-surface-alt border-t border-border flex flex-wrap justify-between gap-3 shrink-0">
               <button
                 type="button"
                 onClick={() => {
@@ -524,8 +546,8 @@ export default function Suppliers() {
       {/* Supplier Payment Modal */}
       {paySupplier && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+            <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white shrink-0">
               <div>
                 <h2 className="text-lg font-bold text-white">Pay Supplier Balance</h2>
                 <p className="text-xs text-white/75">{paySupplier.name}</p>
@@ -538,7 +560,7 @@ export default function Suppliers() {
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handlePaySubmit} className="p-6 space-y-4">
+            <form onSubmit={handlePaySubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="p-3.5 rounded-xl bg-surface-alt border border-border flex items-center justify-between">
                 <span className="text-xs font-bold text-text-muted uppercase">Payable Owed</span>
                 <span className="text-lg font-bold text-danger font-mono tabular-nums">
@@ -560,7 +582,7 @@ export default function Suppliers() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-bold text-primary mb-1">Method</label>
                   <select
@@ -603,6 +625,26 @@ export default function Suppliers() {
           </div>
         </div>
       )}
+
+      <SmartImportModal
+        isOpen={isImportOpen}
+        entityType="suppliers"
+        onClose={() => setIsImportOpen(false)}
+        existingEmails={suppliers.map((s) => s.email || '').filter(Boolean)}
+        onCommit={(rows) =>
+          bulkImportSuppliers(
+            rows.map((r) => ({
+              name: String(r.name || ''),
+              contactPerson: r.contactPerson ? String(r.contactPerson) : undefined,
+              phone: String(r.phone || ''),
+              email: r.email ? String(r.email) : undefined,
+              address: r.address ? String(r.address) : undefined,
+              category: r.category ? String(r.category) : 'Wholesale',
+              currentBalance: Number(r.currentBalance) || 0,
+            }))
+          )
+        }
+      />
     </div>
   );
 }
