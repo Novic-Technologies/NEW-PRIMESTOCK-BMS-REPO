@@ -88,6 +88,8 @@ export interface StaffInvite {
   createdAt: string;
 }
 
+export type ThemePreference = 'light' | 'dark' | 'system';
+
 export interface TenantPreferences {
   mtnMomoEnabled?: boolean;
   mtnMerchantCode?: string;
@@ -95,11 +97,19 @@ export interface TenantPreferences {
   airtelMerchantCode?: string;
   whatsappReceipts?: boolean;
   thermalPrinterName?: string;
+  thermalPrintMode?: 'serial' | 'bluetooth' | 'rawbt' | 'browser';
+  cashDrawerKickEnabled?: boolean;
   staffPinsEnabled?: boolean;
   receiptFooter?: string;
   taxEnabled?: boolean;
   taxRate?: number;
   taxInclusive?: boolean;
+  efrisEnabled?: boolean;
+  efrisDeviceNo?: string;
+  efrisSandbox?: boolean;
+  loyaltyEnabled?: boolean;
+  loyaltyPointsPerUgx?: number;
+  loyaltyUgxPerPoint?: number;
 }
 
 export interface BillingPaymentMethod {
@@ -195,7 +205,7 @@ export interface Tenant {
   ownerName?: string;
   ownerPhone?: string;
   plan: 'micro' | 'starter' | 'business' | 'enterprise';
-  status: 'active' | 'suspended' | 'trial' | 'pending_approval';
+  status: 'active' | 'suspended' | 'locked' | 'trial' | 'pending_approval';
   trialEndsAt: string;
   subscribedAt?: string;
   subscriptionEndsAt?: string;
@@ -219,6 +229,8 @@ export interface Tenant {
   lastReminderAt?: string;
   lastReminderMessage?: string;
   lastReminderChannel?: string;
+  legalAcceptedAt?: string;
+  legalVersion?: string;
   createdAt: string;
   branding?: TenantBranding;
   preferences?: TenantPreferences;
@@ -239,6 +251,16 @@ export interface AppNotification {
   readAt?: string;
 }
 
+export interface ProductBatch {
+  id: string;
+  batchNumber: string;
+  expiryDate?: string;
+  quantity: number;
+  branchId?: string;
+  unitCost?: number;
+  receivedAt?: string;
+}
+
 export interface Product {
   id: string;
   tenantId: string;
@@ -257,6 +279,7 @@ export interface Product {
   unit: string;
   batchNumber?: string;
   expiryDate?: string;
+  batches?: ProductBatch[];
   status: 'active' | 'inactive';
   createdAt: string;
 }
@@ -299,6 +322,14 @@ export interface Sale {
   cashTendered?: number;
   changeGiven?: number;
   splitPayments?: SplitPaymentPart[];
+  loyaltyPointsEarned?: number;
+  loyaltyPointsRedeemed?: number;
+  loyaltyDiscountUgx?: number;
+  efrisFdn?: string;
+  efrisVerificationCode?: string;
+  efrisQrData?: string;
+  efrisFiscalizedAt?: string;
+  efrisStatus?: 'fiscalized' | 'sandbox' | 'pending' | 'failed';
   status: 'completed' | 'pending' | 'refunded';
   refundedAt?: string;
   refundReason?: string;
@@ -330,8 +361,24 @@ export interface PurchaseOrderItem {
   productId: string;
   name: string;
   quantity: number;
+  receivedQuantity?: number;
   unitCost: number;
   total: number;
+}
+
+export interface PurchaseOrderGrnEntry {
+  id: string;
+  receivedAt: string;
+  receivedBy: string;
+  receivedByName?: string;
+  notes?: string;
+  items: Array<{
+    productId: string;
+    name: string;
+    quantityReceived: number;
+    batchNumber?: string;
+    expiryDate?: string;
+  }>;
 }
 
 export interface PurchaseOrder {
@@ -341,12 +388,16 @@ export interface PurchaseOrder {
   reference: string;
   supplierId: string;
   supplierName: string;
+  currency?: 'UGX' | 'USD' | 'KES';
+  exchangeRateToUgx?: number;
+  foreignTotalAmount?: number;
   items: PurchaseOrderItem[];
   totalAmount: number;
   paidAmount: number;
-  status: 'ordered' | 'received' | 'cancelled';
+  status: 'ordered' | 'partially_received' | 'received' | 'cancelled';
   expectedDate?: string;
   receivedAt?: string;
+  grnHistory?: PurchaseOrderGrnEntry[];
   notes?: string;
   createdBy: string;
   createdAt: string;
@@ -433,8 +484,12 @@ export interface StockTransfer {
   toBranchName: string;
   quantity: number;
   notes?: string;
-  status: 'completed';
+  status: 'in_transit' | 'completed' | 'cancelled';
   transferredBy: string;
+  dispatchedAt?: string;
+  receivedAt?: string;
+  receivedBy?: string;
+  receivedByName?: string;
   createdAt: string;
 }
 
@@ -529,7 +584,19 @@ export interface SyncRecord {
   action: 'create' | 'update' | 'delete';
   data: any;
   status: 'pending' | 'synced' | 'error';
+  errorMessage?: string;
+  retryCount?: number;
+  lastAttemptAt?: number;
   createdAt: number;
+}
+
+export interface AIUsageRecord {
+  id: string;
+  tenantId: string;
+  dateKey: string;
+  count: number;
+  lastAction?: string;
+  updatedAt: string;
 }
 
 export interface RestockRecommendation {
@@ -600,6 +667,38 @@ export interface SmartImportFieldMapping {
   confidence?: 'high' | 'medium' | 'low';
 }
 
+export type SmartImportReconcileAction = 'create' | 'update' | 'link' | 'conflict' | 'skip';
+
+export interface SmartImportReconciledRow {
+  rowIndex: number;
+  action: SmartImportReconcileAction;
+  matchedRecordId?: string;
+  matchedRecordLabel?: string;
+  matchReason?: string;
+  conflictFields?: Array<{ field: string; existingValue: any; incomingValue: any }>;
+  resolution?: 'overwrite' | 'keep_existing' | 'create_new';
+  data: Record<string, any>;
+}
+
+export interface SmartImportTableBatch {
+  tableId: string;
+  sectionTitle: string;
+  entityType: SmartImportEntityType;
+  pageRange: string;
+  sourceHeaders: string[];
+  fieldMappings: SmartImportFieldMapping[];
+  rows: Array<Record<string, any>>;
+  rawSpreadsheetRows?: Array<Record<string, any>>;
+  warnings: string[];
+}
+
+export interface SmartImportSkippedTable {
+  sectionTitle: string;
+  pageRange: string;
+  reason: string;
+  rowCount: number;
+}
+
 export interface SmartImportExtractResult {
   entityType: SmartImportEntityType;
   detectedEntityType?: SmartImportEntityType;
@@ -612,6 +711,8 @@ export interface SmartImportExtractResult {
   rows: Array<Record<string, any>>;
   rawSpreadsheetRows?: Array<Record<string, any>>;
   warnings: string[];
+  multiTables?: SmartImportTableBatch[];
+  skippedTables?: SmartImportSkippedTable[];
 }
 
 export interface SmartStocktakeItemResult {

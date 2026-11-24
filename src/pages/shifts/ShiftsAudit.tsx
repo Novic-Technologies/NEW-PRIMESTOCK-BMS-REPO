@@ -12,9 +12,9 @@ import { cn } from '../../lib/utils';
 const ROLE_BADGE_CLASSES: Record<string, string> = {
   admin: 'bg-primary/10 text-primary border-primary/20',
   manager: 'bg-accent/15 text-accent border-accent/25',
-  cashier: 'bg-amber-500/15 text-amber-800 border-amber-500/25',
-  accountant: 'bg-indigo-500/15 text-indigo-800 border-indigo-500/25',
-  inventory: 'bg-emerald-500/15 text-emerald-800 border-emerald-500/25',
+  cashier: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/25',
+  accountant: 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/25',
+  inventory: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/25',
 };
 
 export default function ShiftsAudit() {
@@ -100,7 +100,7 @@ export default function ShiftsAudit() {
               className={cn(
                 'px-4 py-2 text-xs sm:text-sm font-semibold rounded-md transition-colors whitespace-nowrap flex items-center gap-2',
                 activeTab === 'shifts'
-                  ? 'bg-white text-primary shadow-sm'
+                  ? 'bg-surface text-primary shadow-sm'
                   : 'text-text-secondary hover:text-primary'
               )}
             >
@@ -113,7 +113,7 @@ export default function ShiftsAudit() {
               className={cn(
                 'px-4 py-2 text-xs sm:text-sm font-semibold rounded-md transition-colors whitespace-nowrap flex items-center gap-2',
                 activeTab === 'audit'
-                  ? 'bg-white text-primary shadow-sm'
+                  ? 'bg-surface text-primary shadow-sm'
                   : 'text-text-secondary hover:text-primary'
               )}
             >
@@ -460,7 +460,7 @@ export default function ShiftsAudit() {
       {/* Printable Z-Report Modal */}
       {selectedShift && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white no-print shrink-0">
               <h3 className="text-lg font-bold text-white">Shift Z-Report</h3>
               <button

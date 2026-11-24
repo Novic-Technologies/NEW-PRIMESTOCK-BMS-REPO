@@ -283,7 +283,7 @@ export default function Dashboard() {
             <img
               src={tenant.logo}
               alt={tenant.name}
-              className="w-12 h-12 rounded-xl object-cover border border-border bg-white shrink-0"
+              className="w-12 h-12 rounded-xl object-cover border border-border bg-surface shrink-0"
             />
           )}
           <div className="min-w-0">
@@ -386,12 +386,12 @@ export default function Dashboard() {
                     <stop offset="95%" stopColor="var(--color-accent, #0F766E)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#D5DEE9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748B', fontSize: 10 }} />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border)" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: 'var(--color-text-muted)', fontSize: 10 }} />
                 <YAxis
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#64748B', fontSize: 10 }}
+                  tick={{ fill: 'var(--color-text-muted)', fontSize: 10 }}
                   width={52}
                   tickFormatter={(val: number) =>
                     val >= 1000000
@@ -405,9 +405,13 @@ export default function Dashboard() {
                   formatter={(value: number) => [formatUGX(value), 'Sales']}
                   contentStyle={{
                     borderRadius: '12px',
-                    border: '1px solid #D5DEE9',
-                    boxShadow: '0 4px 12px rgba(11,31,58,0.08)',
+                    backgroundColor: 'var(--color-surface)',
+                    border: '1px solid var(--color-border)',
+                    color: 'var(--color-text-primary)',
+                    boxShadow: 'var(--shadow-soft)',
                   }}
+                  itemStyle={{ color: 'var(--color-text-primary)' }}
+                  labelStyle={{ color: 'var(--color-text-secondary)' }}
                 />
                 <Area
                   type="monotone"

@@ -932,7 +932,7 @@ export default function AICopilot() {
             onClick={() => setActiveTab('copilot')}
             className={cn(
               'px-3 py-2 text-xs sm:text-sm font-semibold rounded-md transition-colors whitespace-nowrap',
-              activeTab === 'copilot' ? 'bg-white text-primary shadow-sm' : 'text-text-secondary hover:text-primary'
+              activeTab === 'copilot' ? 'bg-surface text-primary shadow-sm' : 'text-text-secondary hover:text-primary'
             )}
           >
             Copilot &amp; Help
@@ -943,7 +943,7 @@ export default function AICopilot() {
               onClick={() => setActiveTab('inventory')}
               className={cn(
                 'px-3 py-2 text-xs sm:text-sm font-semibold rounded-md transition-colors whitespace-nowrap',
-                activeTab === 'inventory' ? 'bg-white text-primary shadow-sm' : 'text-text-secondary hover:text-primary'
+                activeTab === 'inventory' ? 'bg-surface text-primary shadow-sm' : 'text-text-secondary hover:text-primary'
               )}
             >
               Inventory &amp; Stocktake
@@ -955,7 +955,7 @@ export default function AICopilot() {
               onClick={() => setActiveTab('sales')}
               className={cn(
                 'px-3 py-2 text-xs sm:text-sm font-semibold rounded-md transition-colors whitespace-nowrap',
-                activeTab === 'sales' ? 'bg-white text-primary shadow-sm' : 'text-text-secondary hover:text-primary'
+                activeTab === 'sales' ? 'bg-surface text-primary shadow-sm' : 'text-text-secondary hover:text-primary'
               )}
             >
               Sales, MoMo &amp; WhatsApp
@@ -967,7 +967,7 @@ export default function AICopilot() {
               onClick={() => setActiveTab('finance')}
               className={cn(
                 'px-3 py-2 text-xs sm:text-sm font-semibold rounded-md transition-colors whitespace-nowrap',
-                activeTab === 'finance' ? 'bg-white text-primary shadow-sm' : 'text-text-secondary hover:text-primary'
+                activeTab === 'finance' ? 'bg-surface text-primary shadow-sm' : 'text-text-secondary hover:text-primary'
               )}
             >
               Finance, Suppliers &amp; Audit
@@ -1037,7 +1037,7 @@ export default function AICopilot() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center p-0.5 bg-white border border-border rounded-lg">
+                <div className="flex items-center p-0.5 bg-surface border border-border rounded-lg">
                   <button
                     type="button"
                     onClick={() => setCopilotMode('ask_data')}
@@ -1064,7 +1064,7 @@ export default function AICopilot() {
                   aria-label="Assistant language"
                   value={language}
                   onChange={(e) => setLanguage(e.target.value as AiLanguage)}
-                  className="bg-white border border-border rounded-lg px-2 py-1 text-xs font-semibold text-primary"
+                  className="bg-surface border border-border rounded-lg px-2 py-1 text-xs font-semibold text-primary"
                 >
                   <option value="en">English</option>
                   <option value="lg">Luganda</option>
@@ -1145,7 +1145,7 @@ export default function AICopilot() {
                 e.preventDefault();
                 sendPrompt(input);
               }}
-              className="p-3 sm:p-4 border-t border-border bg-white flex items-center gap-2"
+              className="p-3 sm:p-4 border-t border-border bg-surface flex items-center gap-2"
             >
               <button
                 type="button"

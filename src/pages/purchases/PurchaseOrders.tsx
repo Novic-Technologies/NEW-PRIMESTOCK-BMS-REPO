@@ -25,6 +25,7 @@ import {
   runAiAssistantTool,
   scanDocumentImage,
 } from '../../services/aiService';
+import { convertCurrencyToUgx } from '../../utils/inventoryMath';
 import { canAccessFeature } from '../../utils/planLimits';
 import { SmartImportModal } from '../../components/shared/SmartImportModal';
 import { MobileListSkeleton, TableRowsSkeleton } from '../../components/shared/Skeletons';
@@ -39,7 +40,7 @@ export default function PurchaseOrders() {
     purchaseOrders,
     isLoading,
     createPurchaseOrder,
-    receivePurchaseOrder,
+    receivePurchaseOrderPartial,
     cancelPurchaseOrder,
     bulkImportPurchaseOrders,
   } = usePurchaseOrders();
@@ -53,8 +54,14 @@ export default function PurchaseOrders() {
   const [receivingPO, setReceivingPO] = useState<PurchaseOrder | null>(null);
   const [paidNowInput, setPaidNowInput] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [grnNotes, setGrnNotes] = useState('');
+  const [grnLines, setGrnLines] = useState<
+    Record<string, { quantityReceived: number; batchNumber: string; expiryDate: string }>
+  >({});
 
   const [supplierId, setSupplierId] = useState('');
+  const [poCurrency, setPoCurrency] = useState<'UGX' | 'USD' | 'KES'>('UGX');
+  const [poFxRate, setPoFxRate] = useState('1');
   const [expectedDate, setExpectedDate] = useState('');
   const [notes, setNotes] = useState('');
   const [poItems, setPoItems] = useState<PurchaseOrderItem[]>([]);
@@ -100,7 +107,9 @@ export default function PurchaseOrders() {
   );
 
   const stats = useMemo(() => {
-    const openOrders = scopedPOs.filter((p) => p.status === 'ordered');
+    const openOrders = scopedPOs.filter(
+      (p) => p.status === 'ordered' || p.status === 'partially_received'
+    );
     const receivedOrders = scopedPOs.filter((p) => p.status === 'received');
     const totalOrderedValue = openOrders.reduce((s, p) => s + p.totalAmount, 0);
     return {
@@ -218,22 +227,54 @@ export default function PurchaseOrders() {
       items: poItems,
       expectedDate: expectedDate || undefined,
       notes: notes || undefined,
+      currency: poCurrency,
+      exchangeRateToUgx: poCurrency === 'UGX' ? 1 : Math.max(1, Number(poFxRate) || 1),
     });
     if (created) {
       setIsCreateOpen(false);
       setSupplierId('');
+      setPoCurrency('UGX');
+      setPoFxRate('1');
       setExpectedDate('');
       setNotes('');
       setPoItems([]);
     }
   };
 
+  const openReceiveModal = (po: PurchaseOrder) => {
+    setReceivingPO(po);
+    setGrnNotes('');
+    const initLines: Record<string, { quantityReceived: number; batchNumber: string; expiryDate: string }> = {};
+    po.items.forEach((item) => {
+      const remaining = Math.max(0, item.quantity - (Number(item.receivedQuantity) || 0));
+      initLines[item.productId] = {
+        quantityReceived: remaining,
+        batchNumber: `${po.reference}-LOT`,
+        expiryDate: '',
+      };
+    });
+    setGrnLines(initLines);
+    setPaidNowInput(String(Math.max(0, po.totalAmount - (po.paidAmount || 0))));
+  };
+
   const handleConfirmReceive = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!receivingPO) return;
-    await receivePurchaseOrder(receivingPO.id, Number(paidNowInput) || 0, paymentMethod);
+    await receivePurchaseOrderPartial({
+      poId: receivingPO.id,
+      lineReceipts: receivingPO.items.map((item) => ({
+        productId: item.productId,
+        quantityReceived: Number(grnLines[item.productId]?.quantityReceived) || 0,
+        batchNumber: grnLines[item.productId]?.batchNumber || undefined,
+        expiryDate: grnLines[item.productId]?.expiryDate || undefined,
+      })),
+      paidAtReceiving: Number(paidNowInput) || 0,
+      paymentMethod,
+      notes: grnNotes || undefined,
+    });
     setReceivingPO(null);
     setPaidNowInput('');
+    setGrnNotes('');
   };
 
   const handleRunPoInvoiceCheck = async (opts?: { base64?: string; mimeType?: string }) => {
@@ -259,7 +300,12 @@ export default function PurchaseOrders() {
     }
   };
 
-  const draftTotal = poItems.reduce((sum, i) => sum + i.total, 0);
+  const draftForeignTotal = poItems.reduce((sum, i) => sum + i.total, 0);
+  const draftTotalUgx = convertCurrencyToUgx(
+    draftForeignTotal,
+    poCurrency,
+    poCurrency === 'UGX' ? 1 : Math.max(1, Number(poFxRate) || 1)
+  );
 
   return (
     <div className="space-y-6">
@@ -334,8 +380,8 @@ export default function PurchaseOrders() {
 
       <div className="card p-0 overflow-hidden">
         <div className="p-4 border-b border-border flex flex-wrap items-center justify-between gap-3 bg-surface-alt/50">
-          <div className="flex items-center gap-1 p-1 bg-white border border-border rounded-lg max-w-full overflow-x-auto">
-            {(['all', 'ordered', 'received', 'cancelled'] as const).map((status) => (
+          <div className="flex items-center gap-1 p-1 bg-surface border border-border rounded-lg max-w-full overflow-x-auto">
+            {(['all', 'ordered', 'partially_received', 'received', 'cancelled'] as const).map((status) => (
               <button
                 key={status}
                 type="button"
@@ -347,7 +393,7 @@ export default function PurchaseOrders() {
                     : 'text-text-secondary hover:text-primary'
                 )}
               >
-                {status}
+                {status.replace('_', ' ')}
               </button>
             ))}
           </div>
@@ -388,11 +434,23 @@ export default function PurchaseOrders() {
                     </td>
                     <td className="px-6 py-4 font-medium text-primary">{po.supplierName}</td>
                     <td className="px-6 py-4 text-text-secondary font-mono tabular-nums">
-                      {po.items.length} SKU(s) ·{' '}
-                      {po.items.reduce((s, i) => s + i.quantity, 0)} units
+                      <p>
+                        {po.items.length} SKU(s) ·{' '}
+                        {po.items.reduce((s, i) => s + i.quantity, 0)} units
+                      </p>
+                      {po.grnHistory && po.grnHistory.length > 0 && (
+                        <p className="text-[11px] text-accent">
+                          {po.grnHistory.length} GRN ({po.items.reduce((s, i) => s + (i.receivedQuantity || 0), 0)}/{po.items.reduce((s, i) => s + i.quantity, 0)} recvd)
+                        </p>
+                      )}
                     </td>
                     <td className="px-6 py-4 font-bold text-primary font-mono tabular-nums">
-                      {formatUGX(po.totalAmount)}
+                      <p>{formatUGX(po.totalAmount)}</p>
+                      {po.currency && po.currency !== 'UGX' && po.foreignTotalAmount && (
+                        <p className="text-[11px] font-normal text-text-muted">
+                          {po.currency} {po.foreignTotalAmount.toLocaleString()} @ {po.exchangeRateToUgx}
+                        </p>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <span
@@ -400,12 +458,12 @@ export default function PurchaseOrders() {
                           'text-xs font-bold uppercase',
                           po.status === 'received'
                             ? 'text-accent'
-                            : po.status === 'ordered'
+                            : po.status === 'ordered' || po.status === 'partially_received'
                             ? 'text-accent-alt'
                             : 'text-danger'
                         )}
                       >
-                        {po.status}
+                        {po.status.replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">
@@ -425,26 +483,25 @@ export default function PurchaseOrders() {
                             Check Invoice
                           </button>
                         )}
-                        {po.status === 'ordered' ? (
+                        {po.status === 'ordered' || po.status === 'partially_received' ? (
                           <>
                             <button
                               type="button"
-                              onClick={() => {
-                                setReceivingPO(po);
-                                setPaidNowInput(String(po.totalAmount - (po.paidAmount || 0)));
-                              }}
+                              onClick={() => openReceiveModal(po)}
                               className="btn btn-primary text-xs py-1.5 px-3 min-h-[34px] whitespace-nowrap"
                             >
-                              Receive Stock
+                              {po.status === 'partially_received' ? 'Receive Balance' : 'Receive GRN'}
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => cancelPurchaseOrder(po.id)}
-                              aria-label={`Cancel ${po.reference}`}
-                              className="p-2 text-text-muted hover:text-danger rounded-lg hover:bg-danger/10"
-                            >
-                              <Ban size={16} />
-                            </button>
+                            {po.status === 'ordered' && (
+                              <button
+                                type="button"
+                                onClick={() => cancelPurchaseOrder(po.id)}
+                                aria-label={`Cancel ${po.reference}`}
+                                className="p-2 text-text-muted hover:text-danger rounded-lg hover:bg-danger/10"
+                              >
+                                <Ban size={16} />
+                              </button>
+                            )}
                           </>
                         ) : (
                           <span className="text-xs text-text-muted">
@@ -486,12 +543,12 @@ export default function PurchaseOrders() {
                       'text-[11px] font-bold uppercase shrink-0',
                       po.status === 'received'
                         ? 'text-accent'
-                        : po.status === 'ordered'
+                        : po.status === 'ordered' || po.status === 'partially_received'
                         ? 'text-accent-alt'
                         : 'text-danger'
                     )}
                   >
-                    {po.status}
+                    {po.status.replace('_', ' ')}
                   </span>
                 </div>
 
@@ -522,27 +579,26 @@ export default function PurchaseOrders() {
                       Check Invoice
                     </button>
                   )}
-                  {po.status === 'ordered' ? (
+                  {po.status === 'ordered' || po.status === 'partially_received' ? (
                     <>
                       <button
                         type="button"
-                        onClick={() => {
-                          setReceivingPO(po);
-                          setPaidNowInput(String(po.totalAmount - (po.paidAmount || 0)));
-                        }}
+                        onClick={() => openReceiveModal(po)}
                         className="btn btn-primary text-xs py-1.5 px-3 min-h-[36px] whitespace-nowrap"
                       >
-                        Receive Stock
+                        {po.status === 'partially_received' ? 'Receive Balance' : 'Receive GRN'}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => cancelPurchaseOrder(po.id)}
-                        aria-label={`Cancel ${po.reference}`}
-                        className="btn btn-secondary text-xs py-1.5 px-2.5 min-h-[36px] text-danger hover:bg-danger/10"
-                      >
-                        <Ban size={14} />
-                        Cancel
-                      </button>
+                      {po.status === 'ordered' && (
+                        <button
+                          type="button"
+                          onClick={() => cancelPurchaseOrder(po.id)}
+                          aria-label={`Cancel ${po.reference}`}
+                          className="btn btn-secondary text-xs py-1.5 px-2.5 min-h-[36px] text-danger hover:bg-danger/10"
+                        >
+                          <Ban size={14} />
+                          Cancel
+                        </button>
+                      )}
                     </>
                   ) : (
                     <span className="text-xs text-text-muted">
@@ -559,7 +615,7 @@ export default function PurchaseOrders() {
       {/* Create Purchase Order Modal */}
       {isCreateOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] border border-border">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div className="flex items-center gap-2.5">
                 <ClipboardList size={22} />
@@ -626,6 +682,37 @@ export default function PurchaseOrders() {
                     onChange={(e) => setExpectedDate(e.target.value)}
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-bold text-primary mb-1">Order Currency</label>
+                  <select
+                    className="input w-full"
+                    value={poCurrency}
+                    onChange={(e) => {
+                      const next = e.target.value as 'UGX' | 'USD' | 'KES';
+                      setPoCurrency(next);
+                      setPoFxRate(next === 'UGX' ? '1' : next === 'USD' ? '3700' : '28.5');
+                    }}
+                  >
+                    <option value="UGX">UGX (Uganda Shillings)</option>
+                    <option value="USD">USD (US Dollars)</option>
+                    <option value="KES">KES (Kenyan Shillings)</option>
+                  </select>
+                </div>
+                {poCurrency !== 'UGX' && (
+                  <div>
+                    <label className="block text-sm font-bold text-primary mb-1">
+                      FX Rate (1 {poCurrency} to UGX)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      step="0.1"
+                      className="input w-full font-mono tabular-nums"
+                      value={poFxRate}
+                      onChange={(e) => setPoFxRate(e.target.value)}
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="p-4 border border-border rounded-xl space-y-3">
@@ -712,10 +799,19 @@ export default function PurchaseOrders() {
               </div>
 
               <div className="flex items-center justify-between pt-2 border-t border-border">
-                <span className="text-sm font-bold text-text-secondary">Order Total</span>
-                <span className="text-xl font-bold text-primary font-mono tabular-nums">
-                  {formatUGX(draftTotal)}
+                <span className="text-sm font-bold text-text-secondary">
+                  Order Total {poCurrency !== 'UGX' ? `(${poCurrency} -> UGX)` : ''}
                 </span>
+                <div className="text-right">
+                  {poCurrency !== 'UGX' && (
+                    <p className="text-xs text-text-muted font-mono tabular-nums">
+                      {poCurrency} {draftForeignTotal.toLocaleString()}
+                    </p>
+                  )}
+                  <span className="text-xl font-bold text-primary font-mono tabular-nums">
+                    {formatUGX(draftTotalUgx)}
+                  </span>
+                </div>
               </div>
 
               <div className="flex gap-3">
@@ -739,12 +835,17 @@ export default function PurchaseOrders() {
         </div>
       )}
 
-      {/* Receive Purchase Order Modal */}
+      {/* Receive Purchase Order GRN (Partial & Lot Tracking) Modal */}
       {receivingPO && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90dvh] border border-border">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
-              <h3 className="text-lg font-bold text-white truncate pr-2">Receive {receivingPO.reference}</h3>
+              <div>
+                <h3 className="text-lg font-bold text-white truncate pr-2">
+                  Goods Received Note · {receivingPO.reference}
+                </h3>
+                <p className="text-xs text-white/75">{receivingPO.supplierName}</p>
+              </div>
               <button
                 type="button"
                 onClick={() => setReceivingPO(null)}
@@ -754,45 +855,147 @@ export default function PurchaseOrders() {
               </button>
             </div>
             <form onSubmit={handleConfirmReceive} className="p-6 space-y-4 overflow-y-auto flex-1">
-              <p className="text-sm text-text-secondary">
-                Confirming receipt adds{' '}
-                <strong>{receivingPO.items.reduce((s, i) => s + i.quantity, 0)} units</strong> across{' '}
-                {receivingPO.items.length} product(s) into stock. Any unpaid balance is added to{' '}
-                <strong>{receivingPO.supplierName}</strong>&apos;s payable balance.
-              </p>
-
-              <div className="p-3.5 bg-surface-alt rounded-xl flex justify-between text-sm">
-                <span className="text-text-secondary">Order Total</span>
-                <span className="font-bold text-primary font-mono tabular-nums">
-                  {formatUGX(receivingPO.totalAmount)}
-                </span>
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold text-primary mb-1">
-                  Amount Paid Now (UGX)
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  max={receivingPO.totalAmount}
-                  className="input w-full font-mono tabular-nums"
-                  value={paidNowInput}
-                  onChange={(e) => setPaidNowInput(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold text-primary mb-1">Payment Method</label>
-                <select
-                  className="input w-full"
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-text-secondary">
+                  Enter units delivered in this shipment. Remaining units stay open as <strong>Partially Received</strong>.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const filled: typeof grnLines = {};
+                    receivingPO.items.forEach((it) => {
+                      const rem = Math.max(0, it.quantity - (Number(it.receivedQuantity) || 0));
+                      filled[it.productId] = {
+                        ...(grnLines[it.productId] || { batchNumber: `${receivingPO.reference}-LOT`, expiryDate: '' }),
+                        quantityReceived: rem,
+                      };
+                    });
+                    setGrnLines(filled);
+                  }}
+                  className="text-xs font-bold text-accent hover:underline whitespace-nowrap shrink-0"
                 >
-                  <option value="Cash">Cash</option>
-                  <option value="Mobile Money">Mobile Money</option>
-                  <option value="Bank Transfer">Bank Transfer</option>
-                </select>
+                  Fill All Remaining
+                </button>
+              </div>
+
+              <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                {receivingPO.items.map((item) => {
+                  const already = Number(item.receivedQuantity) || 0;
+                  const remaining = Math.max(0, item.quantity - already);
+                  const line = grnLines[item.productId] || {
+                    quantityReceived: remaining,
+                    batchNumber: '',
+                    expiryDate: '',
+                  };
+                  return (
+                    <div
+                      key={item.productId}
+                      className="p-3 rounded-xl bg-surface-alt/50 border border-border space-y-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-primary truncate">{item.name}</span>
+                        <span className="font-mono tabular-nums text-text-muted shrink-0">
+                          Ordered {item.quantity} · Recvd {already} · Left {remaining}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-text-muted uppercase mb-1">
+                            Qty Now
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={remaining}
+                            className="input-sm w-full font-mono tabular-nums"
+                            value={line.quantityReceived}
+                            onChange={(e) =>
+                              setGrnLines((prev) => ({
+                                ...prev,
+                                [item.productId]: {
+                                  ...line,
+                                  quantityReceived: Math.min(remaining, Math.max(0, Number(e.target.value) || 0)),
+                                },
+                              }))
+                            }
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-text-muted uppercase mb-1">
+                            Batch / Lot #
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Optional"
+                            className="input-sm w-full font-mono"
+                            value={line.batchNumber}
+                            onChange={(e) =>
+                              setGrnLines((prev) => ({
+                                ...prev,
+                                [item.productId]: { ...line, batchNumber: e.target.value },
+                              }))
+                            }
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-text-muted uppercase mb-1">
+                            Expiry Date
+                          </label>
+                          <input
+                            type="date"
+                            className="input-sm w-full"
+                            value={line.expiryDate}
+                            onChange={(e) =>
+                              setGrnLines((prev) => ({
+                                ...prev,
+                                [item.productId]: { ...line, expiryDate: e.target.value },
+                              }))
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-bold text-primary mb-1">
+                    Amount Paid Now (UGX)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={receivingPO.totalAmount}
+                    className="input w-full font-mono tabular-nums"
+                    value={paidNowInput}
+                    onChange={(e) => setPaidNowInput(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-primary mb-1">Payment Method</label>
+                  <select
+                    className="input w-full"
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Mobile Money">Mobile Money</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-primary mb-1">GRN Delivery Note</label>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="Driver name, waybill, or condition note"
+                  value={grnNotes}
+                  onChange={(e) => setGrnNotes(e.target.value)}
+                />
               </div>
 
               <div className="pt-2 flex gap-3">
@@ -804,7 +1007,7 @@ export default function PurchaseOrders() {
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary flex-1">
-                  Confirm &amp; Restock
+                  Confirm GRN &amp; Restock
                 </button>
               </div>
             </form>
@@ -815,7 +1018,7 @@ export default function PurchaseOrders() {
       {/* AI Invoice vs PO Discrepancy Check Modal */}
       {checkingPO && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col border border-border">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white">Check Supplier Invoice</h3>

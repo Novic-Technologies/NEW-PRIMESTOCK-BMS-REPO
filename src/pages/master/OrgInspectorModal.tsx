@@ -138,14 +138,18 @@ export function OrgInspectorModal({
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-4">
-      <div className="bg-[#FBFDFF] rounded-xl border border-[#D5DEE9] shadow-2xl w-full max-w-4xl max-h-[92dvh] flex flex-col overflow-hidden">
+      <div className="bg-surface rounded-xl border border-border shadow-2xl w-full max-w-4xl max-h-[92dvh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-5 py-4 bg-[#0B1F3A] text-white flex items-center justify-between gap-3 shrink-0">
           <div className="min-w-0">
-            <h2 className="text-base font-bold truncate">{org.name}</h2>
+            <h2 className="text-base font-bold text-white truncate">{org.name}</h2>
             <p className="text-xs text-slate-300 truncate">
               {org.ownerEmail || 'No email'} · {quota.name} ·{' '}
-              {org.locked ? 'Locked' : tState.isComplimentary ? 'Complimentary' : org.status}
+              {org.locked || org.status === 'locked'
+                ? 'Locked'
+                : tState.isComplimentary
+                ? 'Complimentary'
+                : org.status}
             </p>
           </div>
           <button
@@ -159,7 +163,7 @@ export function OrgInspectorModal({
         </div>
 
         {/* Navigation Tabs */}
-        <div className="px-5 py-2.5 border-b border-[#D5DEE9] bg-[#F1F5F9] flex items-center gap-2 overflow-x-auto shrink-0">
+        <div className="px-5 py-2.5 border-b border-border bg-surface-alt flex items-center gap-2 overflow-x-auto shrink-0">
           {(
             [
               { id: 'overview', label: 'Quotas & Reminders' },
@@ -175,8 +179,8 @@ export function OrgInspectorModal({
               className={cn(
                 'px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors',
                 tab === t.id
-                  ? 'bg-[#0B1F3A] text-white'
-                  : 'bg-[#FBFDFF] border border-[#D5DEE9] text-[#475569] hover:text-[#0F1E33]'
+                  ? 'bg-[#0B1F3A] dark:bg-accent text-white'
+                  : 'bg-surface border border-border text-text-secondary hover:text-primary'
               )}
             >
               {t.label}
@@ -193,36 +197,36 @@ export function OrgInspectorModal({
               {tab === 'overview' && (
                 <div className="space-y-5">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="p-3.5 rounded-lg border border-[#D5DEE9] bg-[#F1F5F9]">
-                      <p className="text-[11px] font-semibold uppercase text-[#64748B]">Staff Seats</p>
-                      <p className="text-lg font-bold font-mono tabular-nums text-[#0F1E33] mt-1">
+                    <div className="p-3.5 rounded-lg border border-border bg-surface-alt">
+                      <p className="text-[11px] font-semibold uppercase text-text-muted">Staff Seats</p>
+                      <p className="text-lg font-bold font-mono tabular-nums text-primary mt-1">
                         {activeMembers} / {formatLimitDisplay(quota.maxUsers)}
                       </p>
                     </div>
-                    <div className="p-3.5 rounded-lg border border-[#D5DEE9] bg-[#F1F5F9]">
-                      <p className="text-[11px] font-semibold uppercase text-[#64748B]">Products / SKUs</p>
-                      <p className="text-lg font-bold font-mono tabular-nums text-[#0F1E33] mt-1">
+                    <div className="p-3.5 rounded-lg border border-border bg-surface-alt">
+                      <p className="text-[11px] font-semibold uppercase text-text-muted">Products / SKUs</p>
+                      <p className="text-lg font-bold font-mono tabular-nums text-primary mt-1">
                         {snapshot?.productsCount ?? 0} / {formatLimitDisplay(quota.maxProducts)}
                       </p>
                     </div>
-                    <div className="p-3.5 rounded-lg border border-[#D5DEE9] bg-[#F1F5F9]">
-                      <p className="text-[11px] font-semibold uppercase text-[#64748B]">Branches</p>
-                      <p className="text-lg font-bold font-mono tabular-nums text-[#0F1E33] mt-1">
+                    <div className="p-3.5 rounded-lg border border-border bg-surface-alt">
+                      <p className="text-[11px] font-semibold uppercase text-text-muted">Branches</p>
+                      <p className="text-lg font-bold font-mono tabular-nums text-primary mt-1">
                         {snapshot?.branches.length ?? 0} / {formatLimitDisplay(quota.maxBranches)}
                       </p>
                     </div>
-                    <div className="p-3.5 rounded-lg border border-[#D5DEE9] bg-[#F1F5F9]">
-                      <p className="text-[11px] font-semibold uppercase text-[#64748B]">Total Sales</p>
-                      <p className="text-lg font-bold font-mono tabular-nums text-[#0F1E33] mt-1">
+                    <div className="p-3.5 rounded-lg border border-border bg-surface-alt">
+                      <p className="text-[11px] font-semibold uppercase text-text-muted">Total Sales</p>
+                      <p className="text-lg font-bold font-mono tabular-nums text-primary mt-1">
                         {snapshot?.salesCount ?? 0}
                       </p>
                     </div>
                   </div>
 
                   {/* Send Reminder */}
-                  <div className="p-4 rounded-xl border border-[#D5DEE9] space-y-3">
-                    <h3 className="text-sm font-bold text-[#0F1E33] flex items-center gap-2">
-                      <MessageSquare size={16} className="text-[#0F766E]" />
+                  <div className="p-4 rounded-xl border border-border space-y-3">
+                    <h3 className="text-sm font-bold text-primary flex items-center gap-2">
+                      <MessageSquare size={16} className="text-accent" />
                       Dispatch Subscription Notice / Reminder
                     </h3>
                     <div className="flex flex-wrap gap-2">
@@ -234,8 +238,8 @@ export function OrgInspectorModal({
                           className={cn(
                             'px-3 py-1 rounded-md text-xs font-semibold border',
                             reminderChannel === ch
-                              ? 'bg-[#0B1F3A] text-white border-[#0B1F3A]'
-                              : 'bg-[#FBFDFF] text-[#475569] border-[#D5DEE9]'
+                              ? 'bg-[#0B1F3A] dark:bg-accent text-white border-[#0B1F3A] dark:border-accent'
+                              : 'bg-surface text-text-secondary border-border'
                           )}
                         >
                           {ch === 'all' ? 'All Channels' : ch === 'in_app' ? 'In-App Only' : ch}
@@ -266,7 +270,7 @@ export function OrgInspectorModal({
                                   target="_blank"
                                   rel="noreferrer"
                                   onClick={() => toast.dismiss(t.id)}
-                                  className="underline font-bold text-[#0F766E]"
+                                  className="underline font-bold text-accent"
                                 >
                                   Send via wa.me
                                 </a>
@@ -283,29 +287,29 @@ export function OrgInspectorModal({
                   </div>
 
                   {/* Invoice History */}
-                  <div className="border border-[#D5DEE9] rounded-xl overflow-hidden">
-                    <div className="px-4 py-2.5 bg-[#F1F5F9] border-b border-[#D5DEE9] text-xs font-bold text-[#0F1E33]">
+                  <div className="border border-border rounded-xl overflow-hidden">
+                    <div className="px-4 py-2.5 bg-surface-alt border-b border-border text-xs font-bold text-primary">
                       Recent Subscription Invoices ({snapshot?.billingHistory.length ?? 0})
                     </div>
-                    <div className="divide-y divide-[#D5DEE9] max-h-48 overflow-y-auto">
+                    <div className="divide-y divide-border max-h-48 overflow-y-auto">
                       {(snapshot?.billingHistory || []).length === 0 ? (
-                        <p className="p-4 text-xs text-[#64748B]">No invoices recorded yet.</p>
+                        <p className="p-4 text-xs text-text-muted">No invoices recorded yet.</p>
                       ) : (
                         snapshot?.billingHistory.map((inv) => (
                           <div key={inv.id} className="px-4 py-2.5 flex items-center justify-between text-xs">
                             <div>
-                              <p className="font-semibold text-[#0F1E33]">
+                              <p className="font-semibold text-primary">
                                 {inv.reference} · {(inv.plan || org.plan).toUpperCase()}
                               </p>
-                              <p className="text-[11px] text-[#64748B]">
+                              <p className="text-[11px] text-text-muted">
                                 {formatDate(inv.createdAt)} · {inv.paymentMethod || 'Manual'}
                               </p>
                             </div>
                             <div className="text-right">
-                              <p className="font-mono tabular-nums font-bold text-[#0F1E33]">
+                              <p className="font-mono tabular-nums font-bold text-primary">
                                 {formatUGX(inv.amount)}
                               </p>
-                              <p className="text-[11px] font-semibold text-[#0F766E]">{inv.status}</p>
+                              <p className="text-[11px] font-semibold text-accent">{inv.status}</p>
                             </div>
                           </div>
                         ))
@@ -317,23 +321,23 @@ export function OrgInspectorModal({
 
               {tab === 'accounts' && (
                 <div className="space-y-4">
-                  <div className="border border-[#D5DEE9] rounded-xl overflow-x-auto">
+                  <div className="border border-border rounded-xl overflow-x-auto">
                     <table className="w-full text-left text-xs border-collapse min-w-[600px]">
-                      <thead className="bg-[#F1F5F9] border-b border-[#D5DEE9]">
+                      <thead className="bg-surface-alt border-b border-border">
                         <tr>
-                          <th className="p-3 font-bold text-[#475569] uppercase">Sub-Account</th>
-                          <th className="p-3 font-bold text-[#475569] uppercase">Role</th>
-                          <th className="p-3 font-bold text-[#475569] uppercase">Branch</th>
-                          <th className="p-3 font-bold text-[#475569] uppercase">Status</th>
-                          <th className="p-3 font-bold text-[#475569] uppercase text-right">Action</th>
+                          <th className="p-3 font-bold text-text-secondary uppercase">Sub-Account</th>
+                          <th className="p-3 font-bold text-text-secondary uppercase">Role</th>
+                          <th className="p-3 font-bold text-text-secondary uppercase">Branch</th>
+                          <th className="p-3 font-bold text-text-secondary uppercase">Status</th>
+                          <th className="p-3 font-bold text-text-secondary uppercase text-right">Action</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-[#D5DEE9]">
+                      <tbody className="divide-y divide-border">
                         {(snapshot?.members || []).map((m: TenantMember) => (
                           <tr key={m.uid}>
                             <td className="p-3">
-                              <p className="font-semibold text-[#0F1E33]">{m.name}</p>
-                              <p className="text-[11px] text-[#64748B]">{m.email}</p>
+                              <p className="font-semibold text-primary">{m.name}</p>
+                              <p className="text-[11px] text-text-muted">{m.email}</p>
                             </td>
                             <td className="p-3">
                               <select
@@ -380,7 +384,7 @@ export function OrgInspectorModal({
                               <span
                                 className={cn(
                                   'font-semibold',
-                                  m.status === 'active' ? 'text-[#0F766E]' : 'text-red-600'
+                                  m.status === 'active' ? 'text-accent' : 'text-danger'
                                 )}
                               >
                                 {m.status === 'active' ? 'Active' : 'Inactive'}
@@ -396,7 +400,7 @@ export function OrgInspectorModal({
                                   });
                                   if (ok) await onRefresh(org);
                                 }}
-                                className="text-xs font-semibold text-[#0F1E33] hover:underline whitespace-nowrap"
+                                className="text-xs font-semibold text-primary hover:underline whitespace-nowrap"
                               >
                                 {m.status === 'active' ? 'Deactivate' : 'Reactivate'}
                               </button>
@@ -408,11 +412,11 @@ export function OrgInspectorModal({
                   </div>
 
                   {(snapshot?.invites || []).filter((i) => i.status === 'pending').length > 0 && (
-                    <div className="border border-[#D5DEE9] rounded-xl overflow-hidden">
-                      <div className="px-4 py-2.5 bg-[#F1F5F9] border-b border-[#D5DEE9] text-xs font-bold text-[#0F1E33]">
+                    <div className="border border-border rounded-xl overflow-hidden">
+                      <div className="px-4 py-2.5 bg-surface-alt border-b border-border text-xs font-bold text-primary">
                         Pending Staff Invites
                       </div>
-                      <div className="divide-y divide-[#D5DEE9]">
+                      <div className="divide-y divide-border">
                         {snapshot?.invites
                           .filter((i) => i.status === 'pending')
                           .map((inv) => (
@@ -421,10 +425,10 @@ export function OrgInspectorModal({
                               className="px-4 py-2.5 flex items-center justify-between text-xs"
                             >
                               <div>
-                                <p className="font-semibold text-[#0F1E33]">
+                                <p className="font-semibold text-primary">
                                   {inv.name} ({inv.email})
                                 </p>
-                                <p className="text-[11px] text-[#64748B]">
+                                <p className="text-[11px] text-text-muted">
                                   Role: {ROLE_META[inv.role]?.label || inv.role}
                                 </p>
                               </div>
@@ -435,7 +439,7 @@ export function OrgInspectorModal({
                                   const ok = await onRevokeInvite(inv);
                                   if (ok) await onRefresh(org);
                                 }}
-                                className="text-red-600 font-semibold hover:underline"
+                                className="text-danger font-semibold hover:underline"
                               >
                                 Revoke
                               </button>
@@ -452,14 +456,14 @@ export function OrgInspectorModal({
                   {(snapshot?.branches || []).map((b) => (
                     <div
                       key={b.id}
-                      className="p-4 rounded-xl border border-[#D5DEE9] bg-[#F1F5F9] flex items-start justify-between gap-2"
+                      className="p-4 rounded-xl border border-border bg-surface-alt flex items-start justify-between gap-2"
                     >
                       <div>
-                        <p className="text-sm font-bold text-[#0F1E33]">{b.name}</p>
-                        <p className="text-xs text-[#64748B]">{b.location}</p>
-                        {b.phone && <p className="text-xs font-mono text-[#475569] mt-1">{b.phone}</p>}
+                        <p className="text-sm font-bold text-primary">{b.name}</p>
+                        <p className="text-xs text-text-muted">{b.location}</p>
+                        {b.phone && <p className="text-xs font-mono text-text-secondary mt-1">{b.phone}</p>}
                       </div>
-                      <span className="text-[11px] font-semibold text-[#0F766E]">
+                      <span className="text-[11px] font-semibold text-accent">
                         {b.isDefault ? 'Default' : b.status}
                       </span>
                     </div>
@@ -470,12 +474,12 @@ export function OrgInspectorModal({
               {tab === 'subscription' && (
                 <div className="space-y-5">
                   {org.pendingPlan && (
-                    <div className="p-4 rounded-xl border border-amber-300 bg-amber-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="p-4 rounded-xl border border-accent-alt/30 bg-accent-alt/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div className="text-xs">
-                        <p className="font-bold text-amber-900">
+                        <p className="font-bold text-primary">
                           Pending Upgrade Request: {getPlanQuota(org.pendingPlan).name}
                         </p>
-                        <p className="text-amber-800 font-mono">
+                        <p className="text-text-secondary font-mono">
                           Ref: {org.pendingPaymentRef || '—'} ·{' '}
                           {formatUGX(org.pendingAmountUgx || getPlanQuota(org.pendingPlan).monthlyPriceUgx)}
                         </p>
@@ -498,15 +502,15 @@ export function OrgInspectorModal({
                   {/* Edit Subscription */}
                   <form
                     onSubmit={handleSaveSubscription}
-                    className="p-4 rounded-xl border border-[#D5DEE9] space-y-3"
+                    className="p-4 rounded-xl border border-border space-y-3"
                   >
-                    <h3 className="text-sm font-bold text-[#0F1E33] flex items-center gap-2">
-                      <Layers size={15} className="text-[#0F766E]" />
+                    <h3 className="text-sm font-bold text-primary flex items-center gap-2">
+                      <Layers size={15} className="text-accent" />
                       Override Plan &amp; Billing Dates
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                       <div>
-                        <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                        <label className="block text-[11px] font-bold text-text-secondary mb-1">
                           Active Plan
                         </label>
                         <select
@@ -522,7 +526,7 @@ export function OrgInspectorModal({
                         </select>
                       </div>
                       <div>
-                        <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                        <label className="block text-[11px] font-bold text-text-secondary mb-1">
                           Subscribed Start
                         </label>
                         <input
@@ -533,7 +537,7 @@ export function OrgInspectorModal({
                         />
                       </div>
                       <div>
-                        <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                        <label className="block text-[11px] font-bold text-text-secondary mb-1">
                           Subscription Expiry
                         </label>
                         <input
@@ -544,7 +548,7 @@ export function OrgInspectorModal({
                         />
                       </div>
                       <div>
-                        <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                        <label className="block text-[11px] font-bold text-text-secondary mb-1">
                           Custom Price (UGX)
                         </label>
                         <input
@@ -558,7 +562,7 @@ export function OrgInspectorModal({
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                      <label className="flex items-center gap-2 text-xs text-[#334155]">
+                      <label className="flex items-center gap-2 text-xs text-text-secondary">
                         <input
                           type="checkbox"
                           checked={editAutoRemind}
@@ -578,9 +582,9 @@ export function OrgInspectorModal({
                   </form>
 
                   {/* Grant Complimentary */}
-                  <div className="p-4 rounded-xl border border-[#D5DEE9] space-y-3">
-                    <h3 className="text-sm font-bold text-[#0F1E33] flex items-center gap-2">
-                      <Gift size={15} className="text-[#0F766E]" />
+                  <div className="p-4 rounded-xl border border-border space-y-3">
+                    <h3 className="text-sm font-bold text-primary flex items-center gap-2">
+                      <Gift size={15} className="text-accent" />
                       Grant Complimentary Free Access
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -621,20 +625,20 @@ export function OrgInspectorModal({
                   </div>
 
                   {/* Lock / Suspend & Purge */}
-                  <div className="p-4 rounded-xl border border-red-200 bg-red-50/40 space-y-4">
+                  <div className="p-4 rounded-xl border border-danger/30 bg-danger/5 space-y-4">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div>
-                        <p className="text-sm font-bold text-[#0F1E33] flex items-center gap-1.5">
-                          <ShieldAlert size={15} className="text-red-600" />
+                        <p className="text-sm font-bold text-primary flex items-center gap-1.5">
+                          <ShieldAlert size={15} className="text-danger" />
                           Workspace Access Lock
                         </p>
-                        <p className="text-xs text-[#64748B]">
-                          {org.locked || org.status === 'suspended'
+                        <p className="text-xs text-text-muted">
+                          {org.locked || org.status === 'locked' || org.status === 'suspended'
                             ? 'Currently locked. Unlock to immediately restore storefront access.'
                             : 'Suspending prevents merchant logins & writes while preserving data.'}
                         </p>
                       </div>
-                      {org.locked || org.status === 'suspended' ? (
+                      {org.locked || org.status === 'locked' || org.status === 'suspended' ? (
                         <button
                           type="button"
                           disabled={isActing}
@@ -651,7 +655,7 @@ export function OrgInspectorModal({
                         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
                           <input
                             type="text"
-                            className="input-sm w-full sm:w-48 bg-[#FBFDFF]"
+                            className="input-sm w-full sm:w-48"
                             placeholder="Suspension reason..."
                             value={disableReason}
                             onChange={(e) => setDisableReason(e.target.value)}
@@ -663,7 +667,7 @@ export function OrgInspectorModal({
                               const ok = await onToggleDisable(org, true, disableReason);
                               if (ok) await onRefresh(org);
                             }}
-                            className="btn bg-red-600 text-white hover:bg-red-700 text-xs gap-1.5 whitespace-nowrap shrink-0"
+                            className="btn bg-danger text-white hover:brightness-95 text-xs gap-1.5 whitespace-nowrap shrink-0"
                           >
                             <Lock size={14} />
                             Lock
@@ -672,17 +676,17 @@ export function OrgInspectorModal({
                       )}
                     </div>
 
-                    <div className="pt-3 border-t border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="pt-3 border-t border-danger/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div className="text-xs">
-                        <p className="font-bold text-red-900">Permanently Purge Workspace</p>
-                        <p className="text-red-700">
-                          Type <strong>{org.name}</strong> to permanently wipe all subcollections &amp; free email locks.
+                        <p className="font-bold text-danger">Permanently Purge Workspace</p>
+                        <p className="text-text-secondary">
+                          Type <strong className="text-primary">{org.name}</strong> to permanently wipe all subcollections &amp; free email locks.
                         </p>
                       </div>
                       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
                         <input
                           type="text"
-                          className="input-sm w-full sm:w-44 bg-[#FBFDFF]"
+                          className="input-sm w-full sm:w-44"
                           placeholder={org.name}
                           value={purgeConfirmName}
                           onChange={(e) => setPurgeConfirmName(e.target.value)}
@@ -694,7 +698,7 @@ export function OrgInspectorModal({
                             const ok = await onDeleteWorkspace(org);
                             if (ok) onClose();
                           }}
-                          className="btn bg-red-700 text-white hover:bg-red-800 disabled:opacity-40 text-xs gap-1.5 whitespace-nowrap shrink-0"
+                          className="btn bg-danger text-white hover:brightness-95 disabled:opacity-40 text-xs gap-1.5 whitespace-nowrap shrink-0"
                         >
                           <Trash2 size={14} />
                           Purge

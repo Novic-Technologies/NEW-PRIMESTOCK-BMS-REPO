@@ -7,6 +7,7 @@ import { TierGate } from './components/shared/TierGate';
 import { PageContentSkeleton, WorkspaceBootSkeleton } from './components/shared/Skeletons';
 import { routeLoaders } from './utils/routePrefetch';
 import { useAuthStore } from './store/authStore';
+import { useThemeStore } from './store/themeStore';
 import { useAuthObserver } from './hooks/useAuth';
 import { usePlatformPlansSync } from './utils/platformPlans';
 import { applyTenantTheme } from './utils/branding';
@@ -98,6 +99,7 @@ const MasterRoute = ({ children }: { children: React.ReactNode }) => {
 export default function App() {
   useAuthObserver();
   const { user, tenant } = useAuthStore();
+  const { resolvedTheme } = useThemeStore();
   usePlatformPlansSync(Boolean(user));
 
   React.useEffect(() => {
@@ -106,7 +108,23 @@ export default function App() {
 
   return (
     <Router>
-      <Toaster position="top-right" />
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          style:
+            resolvedTheme === 'dark'
+              ? {
+                  background: '#162238',
+                  color: '#F1F5F9',
+                  border: '1px solid #25344E',
+                }
+              : {
+                  background: '#FFFFFF',
+                  color: '#0F1E33',
+                  border: '1px solid #D5DEE9',
+                },
+        }}
+      />
       <Suspense fallback={<WorkspaceBootSkeleton />}>
         <Routes>
           <Route path="/login" element={<Login />} />

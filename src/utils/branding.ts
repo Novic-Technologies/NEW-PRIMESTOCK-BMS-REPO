@@ -98,9 +98,10 @@ export function applyTenantTheme(tenant: Tenant | null) {
     : DEFAULT_BRANDING.secondaryAccentColor;
 
   root.style.setProperty('--color-primary', primary);
+  root.style.setProperty('--color-brand-primary', primary);
   root.style.setProperty('--color-accent', accent);
+  root.style.setProperty('--color-brand-accent', accent);
   root.style.setProperty('--color-accent-alt', secondary);
-  root.style.setProperty('--color-text-primary', primary);
   root.style.setProperty('--color-primary-contrast', getContrastTextColor(primary));
   root.style.setProperty('--color-accent-contrast', getContrastTextColor(accent));
 

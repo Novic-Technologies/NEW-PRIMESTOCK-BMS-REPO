@@ -83,10 +83,10 @@ export default function MasterPaymentChannels() {
     <form onSubmit={handleSave} className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[#0F1E33] tracking-tight">
+          <h1 className="text-2xl font-bold text-primary tracking-tight">
             Subscription Payment Channels
           </h1>
-          <p className="text-sm text-[#475569] mt-0.5">
+          <p className="text-sm text-text-secondary mt-0.5">
             Set the official MoMo codes, Airtel Merchant IDs, Flutterwave channels, and Bank accounts businesses pay into when upgrading.
           </p>
         </div>
@@ -115,18 +115,18 @@ export default function MasterPaymentChannels() {
       </div>
 
       {/* Platform Support Contacts */}
-      <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 space-y-4">
+      <div className="bg-surface border border-border rounded-xl p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-bold text-[#0F1E33]">
+            <h2 className="text-sm font-bold text-primary">
               Platform Billing Support Contacts
             </h2>
-            <p className="text-xs text-[#64748B]">
+            <p className="text-xs text-text-muted">
               Displayed inside merchant Billing checkout screens for payment assistance.
             </p>
           </div>
           {draft.updatedAt && (
-            <span className="text-[11px] font-mono text-[#64748B]">
+            <span className="text-[11px] font-mono text-text-muted">
               Synced {formatDate(draft.updatedAt)}
             </span>
           )}
@@ -134,7 +134,7 @@ export default function MasterPaymentChannels() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+            <label className="block text-xs font-bold text-primary mb-1">
               Support Email
             </label>
             <input
@@ -149,7 +149,7 @@ export default function MasterPaymentChannels() {
             />
           </div>
           <div>
-            <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+            <label className="block text-xs font-bold text-primary mb-1">
               Support Phone
             </label>
             <input
@@ -164,7 +164,7 @@ export default function MasterPaymentChannels() {
             />
           </div>
           <div>
-            <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+            <label className="block text-xs font-bold text-primary mb-1">
               Billing WhatsApp Number
             </label>
             <input
@@ -182,14 +182,14 @@ export default function MasterPaymentChannels() {
       </div>
 
       {/* Channels List */}
-      <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 space-y-4">
+      <div className="bg-surface border border-border rounded-xl p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-bold text-[#0F1E33] flex items-center gap-2">
-              <CreditCard size={16} className="text-[#0F766E]" />
+            <h2 className="text-sm font-bold text-primary flex items-center gap-2">
+              <CreditCard size={16} className="text-accent" />
               Configured Channels ({draft.channels.length} / 15)
             </h2>
-            <p className="text-xs text-[#64748B]">
+            <p className="text-xs text-text-muted">
               Enable/disable channels and edit account numbers or USSD dial prefixes.
             </p>
           </div>
@@ -213,8 +213,8 @@ export default function MasterPaymentChannels() {
                 className={cn(
                   'p-4 rounded-xl border space-y-3',
                   ch.enabled
-                    ? 'border-[#D5DEE9] bg-[#FBFDFF]'
-                    : 'border-[#D5DEE9] bg-[#F1F5F9] opacity-80'
+                    ? 'border-border bg-surface'
+                    : 'border-border bg-surface-alt opacity-80'
                 )}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -224,17 +224,17 @@ export default function MasterPaymentChannels() {
                       checked={ch.enabled}
                       onChange={(e) => updateChannel(idx, { enabled: e.target.checked })}
                     />
-                    <span className="text-sm font-bold text-[#0F1E33]">
+                    <span className="text-sm font-bold text-primary">
                       {ch.label || ch.id}
                     </span>
-                    <span className="text-[11px] font-mono text-[#64748B]">({ch.id})</span>
+                    <span className="text-[11px] font-mono text-text-muted">({ch.id})</span>
                   </label>
 
                   <div className="flex items-center gap-3">
                     <span
                       className={cn(
                         'text-xs font-semibold',
-                        ch.enabled ? 'text-[#0F766E]' : 'text-[#64748B]'
+                        ch.enabled ? 'text-accent' : 'text-text-muted'
                       )}
                     >
                       {ch.enabled ? 'Active for Businesses' : 'Hidden'}
@@ -243,7 +243,7 @@ export default function MasterPaymentChannels() {
                       <button
                         type="button"
                         onClick={() => removeCustomChannel(idx)}
-                        className="p-1 text-[#64748B] hover:text-red-600"
+                        className="p-1 text-text-muted hover:text-danger"
                         aria-label={`Delete ${ch.label}`}
                       >
                         <Trash2 size={15} />
@@ -254,7 +254,7 @@ export default function MasterPaymentChannels() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                    <label className="block text-[11px] font-bold text-text-secondary mb-1">
                       Button Label *
                     </label>
                     <input
@@ -267,7 +267,7 @@ export default function MasterPaymentChannels() {
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                    <label className="block text-[11px] font-bold text-text-secondary mb-1">
                       Invoice Method Name *
                     </label>
                     <input
@@ -282,7 +282,7 @@ export default function MasterPaymentChannels() {
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                    <label className="block text-[11px] font-bold text-text-secondary mb-1">
                       Sublabel
                     </label>
                     <input
@@ -294,7 +294,7 @@ export default function MasterPaymentChannels() {
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                    <label className="block text-[11px] font-bold text-text-secondary mb-1">
                       Account / Merchant Name
                     </label>
                     <input
@@ -306,7 +306,7 @@ export default function MasterPaymentChannels() {
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                    <label className="block text-[11px] font-bold text-text-secondary mb-1">
                       Merchant Code / Account No.
                     </label>
                     <input
@@ -320,7 +320,7 @@ export default function MasterPaymentChannels() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                      <label className="block text-[11px] font-bold text-text-secondary mb-1">
                         Bank Name
                       </label>
                       <input
@@ -332,7 +332,7 @@ export default function MasterPaymentChannels() {
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                      <label className="block text-[11px] font-bold text-text-secondary mb-1">
                         USSD Prefix
                       </label>
                       <input
@@ -348,7 +348,7 @@ export default function MasterPaymentChannels() {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                  <label className="block text-[11px] font-bold text-text-secondary mb-1">
                     Checkout Instructions
                   </label>
                   <textarea

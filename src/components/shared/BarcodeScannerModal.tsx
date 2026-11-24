@@ -100,7 +100,7 @@ export function BarcodeScannerModal({
 
   return (
     <div className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-[70] flex items-center justify-center p-3 sm:p-4 no-print">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+      <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
         <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
           <div className="flex items-center gap-2.5">
             <Camera size={20} />

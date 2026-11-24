@@ -7,15 +7,26 @@ export function useTrialGuard(): TrialState {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
-    setNowMs(Date.now());
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 60_000);
-    return () => window.clearInterval(interval);
+    const syncNow = () => setNowMs(Date.now());
+    syncNow();
+
+    const interval = window.setInterval(syncNow, 30_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') syncNow();
+    };
+    window.addEventListener('focus', syncNow);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', syncNow);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [
     tenant?.id,
     tenant?.status,
     tenant?.locked,
+    tenant?.createdAt,
     tenant?.subscribedAt,
     tenant?.trialEndsAt,
     tenant?.subscriptionEndsAt,

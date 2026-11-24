@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Clock,
   ExternalLink,
   Mail,
   RefreshCw,
   Send,
+  Server,
   ShieldCheck,
 } from 'lucide-react';
 import { SweepReport, useMasterAdmin } from '../../hooks/useMasterAdmin';
@@ -14,7 +16,9 @@ import {
   getNotificationServiceStatus,
   sendTestEmail,
 } from '../../services/notificationService';
+import { triggerServerExpirySweep } from '../../services/aiService';
 import { cn } from '../../lib/utils';
+import toast from 'react-hot-toast';
 
 export default function MasterSystemOps() {
   const { user, isMasterAdmin } = useAuthStore();
@@ -24,6 +28,14 @@ export default function MasterSystemOps() {
   const [serviceStatus, setServiceStatus] = useState<EmailServiceStatus | null>(null);
   const [testEmailTo, setTestEmailTo] = useState(user?.email || '');
   const [isTestingEmail, setIsTestingEmail] = useState(false);
+  const [isRunningServerSweep, setIsRunningServerSweep] = useState(false);
+  const [serverSweepResult, setServerSweepResult] = useState<{
+    checkedCount: number;
+    lockedCount: number;
+    remindedCount: number;
+    emailedCount: number;
+    ranAt: string;
+  } | null>(null);
   const [testEmailResult, setTestEmailResult] = useState<{
     ok: boolean;
     message: string;
@@ -75,55 +87,70 @@ export default function MasterSystemOps() {
     setLastSweep(report);
   };
 
+  const handleRunServerCronSweep = async () => {
+    setIsRunningServerSweep(true);
+    try {
+      const res = await triggerServerExpirySweep();
+      setServerSweepResult({ ...res, ranAt: new Date().toISOString() });
+      toast.success(
+        `Backend sweep completed: ${res.checkedCount} checked, ${res.lockedCount} locked, ${res.emailedCount} emailed`
+      );
+    } catch (err: any) {
+      toast.error(err?.message || 'Backend cron sweep failed');
+    } finally {
+      setIsRunningServerSweep(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-[#0F1E33] tracking-tight">
+        <h1 className="text-2xl font-bold text-primary tracking-tight">
           System Operations &amp; Automated Sweeps
         </h1>
-        <p className="text-sm text-[#475569] mt-0.5">
-          Run expiry &amp; pre-renewal reminder sweeps across all tenant workspaces, verify email/WhatsApp delivery, and monitor live webhook endpoints.
+        <p className="text-sm text-text-secondary mt-0.5">
+          Run expiry &amp; pre-renewal reminder sweeps across all tenant workspaces, verify email/WhatsApp delivery, and monitor live webhook &amp; cron endpoints.
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Subscription Expiry & Reminder Sweep */}
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 space-y-4">
+        <div className="bg-surface border border-border rounded-xl p-5 space-y-4">
           <div className="flex items-center gap-2.5">
-            <RefreshCw size={18} className="text-[#0F766E]" />
-            <h2 className="text-sm font-bold text-[#0F1E33]">
+            <RefreshCw size={18} className="text-accent" />
+            <h2 className="text-sm font-bold text-primary">
               Platform Expiry &amp; Reminder Sweep
             </h2>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#F1F5F9] border border-[#D5DEE9] text-xs space-y-2">
+          <div className="p-4 rounded-xl bg-surface-alt border border-border text-xs space-y-2">
             <div className="flex justify-between">
-              <span className="text-[#64748B]">Configured Trial Window</span>
-              <strong className="font-mono tabular-nums text-[#0F1E33]">
+              <span className="text-text-muted">Configured Trial Window</span>
+              <strong className="font-mono tabular-nums text-primary">
                 {plansConfig.trialDays} days
               </strong>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#64748B]">Pre-Expiry Reminder Lead</span>
-              <strong className="font-mono tabular-nums text-[#0F1E33]">
+              <span className="text-text-muted">Pre-Expiry Reminder Lead</span>
+              <strong className="font-mono tabular-nums text-primary">
                 {plansConfig.reminderLeadDays} days before expiry
               </strong>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#64748B]">Auto-Lock Overdue Orgs</span>
+              <span className="text-text-muted">Auto-Lock Overdue Orgs</span>
               <strong
                 className={
-                  plansConfig.autoLockExpired ? 'text-[#0F766E]' : 'text-amber-700'
+                  plansConfig.autoLockExpired ? 'text-accent' : 'text-amber-600 dark:text-amber-400'
                 }
               >
                 {plansConfig.autoLockExpired ? 'Enabled' : 'Disabled (Alerts Only)'}
               </strong>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#64748B]">Strict Quota Enforcement</span>
+              <span className="text-text-muted">Strict Quota Enforcement</span>
               <strong
                 className={
-                  plansConfig.strictEnforcement ? 'text-[#0F766E]' : 'text-amber-700'
+                  plansConfig.strictEnforcement ? 'text-accent' : 'text-amber-600 dark:text-amber-400'
                 }
               >
                 {plansConfig.strictEnforcement ? 'Enforced' : 'Advisory'}
@@ -131,49 +158,100 @@ export default function MasterSystemOps() {
             </div>
           </div>
 
-          <button
-            type="button"
-            disabled={isActing || organizations.length === 0}
-            onClick={handleRunSweep}
-            className="btn btn-primary w-full py-2.5 text-xs gap-1.5 whitespace-nowrap"
-          >
-            <RefreshCw size={14} className={isActing ? 'animate-spin' : ''} />
-            Run Platform Sweep ({organizations.length} businesses)
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              disabled={isActing || organizations.length === 0}
+              onClick={handleRunSweep}
+              className="btn btn-primary w-full py-2.5 text-xs gap-1.5 whitespace-nowrap"
+            >
+              <RefreshCw size={14} className={isActing ? 'animate-spin' : ''} />
+              Run Console Sweep ({organizations.length})
+            </button>
+            <button
+              type="button"
+              disabled={isRunningServerSweep}
+              onClick={handleRunServerCronSweep}
+              className="btn btn-secondary w-full py-2.5 text-xs gap-1.5 whitespace-nowrap"
+            >
+              <Server size={14} className={isRunningServerSweep ? 'animate-pulse text-accent' : 'text-accent'} />
+              {isRunningServerSweep ? 'Running Server Job...' : 'Run Server Cron Sweep'}
+            </button>
+          </div>
+
+          {serverSweepResult && (
+            <div className="p-4 rounded-xl border border-accent/30 bg-accent/5 space-y-2 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-bold text-primary flex items-center gap-1.5">
+                  <Clock size={14} className="text-accent" />
+                  Server Cron Job Executed
+                </p>
+                <span className="text-[11px] font-mono text-text-muted">
+                  {new Date(serverSweepResult.ranAt).toLocaleTimeString()}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                <div className="p-2 rounded-lg bg-surface border border-border">
+                  <p className="text-[10px] text-text-muted uppercase">Checked</p>
+                  <p className="font-mono font-bold text-primary mt-0.5">
+                    {serverSweepResult.checkedCount}
+                  </p>
+                </div>
+                <div className="p-2 rounded-lg bg-surface border border-border">
+                  <p className="text-[10px] text-text-muted uppercase">Locked</p>
+                  <p className="font-mono font-bold text-danger mt-0.5">
+                    {serverSweepResult.lockedCount}
+                  </p>
+                </div>
+                <div className="p-2 rounded-lg bg-surface border border-border">
+                  <p className="text-[10px] text-text-muted uppercase">Reminded</p>
+                  <p className="font-mono font-bold text-amber-600 dark:text-amber-400 mt-0.5">
+                    {serverSweepResult.remindedCount}
+                  </p>
+                </div>
+                <div className="p-2 rounded-lg bg-surface border border-border">
+                  <p className="text-[10px] text-text-muted uppercase">Emails</p>
+                  <p className="font-mono font-bold text-accent mt-0.5">
+                    {serverSweepResult.emailedCount}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {lastSweep && (
-            <div className="p-4 rounded-xl border border-[#D5DEE9] space-y-3 text-xs">
-              <p className="font-bold text-[#0F1E33]">Latest Sweep Report</p>
+            <div className="p-4 rounded-xl border border-border space-y-3 text-xs">
+              <p className="font-bold text-primary">Latest Console Sweep Report</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                <div className="p-2 rounded-lg bg-[#F1F5F9]">
-                  <p className="text-[10px] text-[#64748B] uppercase">Checked</p>
-                  <p className="font-mono font-bold text-[#0F1E33] mt-0.5">
+                <div className="p-2 rounded-lg bg-surface-alt">
+                  <p className="text-[10px] text-text-muted uppercase">Checked</p>
+                  <p className="font-mono font-bold text-primary mt-0.5">
                     {lastSweep.checkedCount}
                   </p>
                 </div>
-                <div className="p-2 rounded-lg bg-[#F1F5F9]">
-                  <p className="text-[10px] text-[#64748B] uppercase">Locked</p>
-                  <p className="font-mono font-bold text-red-600 mt-0.5">
+                <div className="p-2 rounded-lg bg-surface-alt">
+                  <p className="text-[10px] text-text-muted uppercase">Locked</p>
+                  <p className="font-mono font-bold text-danger mt-0.5">
                     {lastSweep.lockedCount}
                   </p>
                 </div>
-                <div className="p-2 rounded-lg bg-[#F1F5F9]">
-                  <p className="text-[10px] text-[#64748B] uppercase">Reminded</p>
-                  <p className="font-mono font-bold text-amber-700 mt-0.5">
+                <div className="p-2 rounded-lg bg-surface-alt">
+                  <p className="text-[10px] text-text-muted uppercase">Reminded</p>
+                  <p className="font-mono font-bold text-amber-600 dark:text-amber-400 mt-0.5">
                     {lastSweep.remindedCount}
                   </p>
                 </div>
-                <div className="p-2 rounded-lg bg-[#F1F5F9]">
-                  <p className="text-[10px] text-[#64748B] uppercase">Emails</p>
-                  <p className="font-mono font-bold text-[#0F766E] mt-0.5">
+                <div className="p-2 rounded-lg bg-surface-alt">
+                  <p className="text-[10px] text-text-muted uppercase">Emails</p>
+                  <p className="font-mono font-bold text-accent mt-0.5">
                     {lastSweep.emailedCount}
                   </p>
                 </div>
               </div>
 
               {lastSweep.whatsappLinks.length > 0 && (
-                <div className="space-y-1.5 pt-2 border-t border-[#D5DEE9]">
-                  <p className="font-semibold text-[#475569]">
+                <div className="space-y-1.5 pt-2 border-t border-border">
+                  <p className="font-semibold text-text-secondary">
                     Direct WhatsApp Fallback Links ({lastSweep.whatsappLinks.length})
                   </p>
                   <div className="max-h-36 overflow-y-auto space-y-1">
@@ -183,7 +261,7 @@ export default function MasterSystemOps() {
                         href={item.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-[#F1F5F9] hover:bg-[#F1F5F9] text-[#0F766E] font-medium"
+                        className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-surface-alt hover:bg-border/60 text-accent font-medium"
                       >
                         <span className="truncate">{item.tenantName}</span>
                         <ExternalLink size={12} className="shrink-0" />
@@ -195,27 +273,40 @@ export default function MasterSystemOps() {
             </div>
           )}
 
-          <div className="p-4 rounded-xl border border-[#D5DEE9] text-xs space-y-1.5">
-            <p className="font-bold text-[#0F1E33] flex items-center gap-1.5">
-              <ShieldCheck size={15} className="text-[#0F766E]" />
-              Live Flutterwave Webhook Listener
+          <div className="p-4 rounded-xl border border-border text-xs space-y-2">
+            <p className="font-bold text-primary flex items-center gap-1.5">
+              <ShieldCheck size={15} className="text-accent" />
+              Automated Scheduler &amp; Webhook Endpoints
             </p>
-            <p className="text-[#475569]">
-              Endpoint: <code className="font-mono font-semibold text-[#0F1E33]">/api/webhooks/flutterwave</code>
+            <p className="text-text-secondary">
+              Daily Cron Endpoint:{' '}
+              <code className="font-mono font-semibold text-primary">
+                POST /api/cron/subscription-sweep
+              </code>
             </p>
-            <p className="text-[#64748B]">
+            <p className="text-text-muted">
+              Schedule Cloud Scheduler or cron-job.org daily with header{' '}
+              <code className="font-mono">x-cron-secret: &lt;CRON_SECRET&gt;</code> (requires Firestore access token or Master Admin Bearer token).
+            </p>
+            <p className="text-text-secondary pt-1">
+              Flutterwave Webhook:{' '}
+              <code className="font-mono font-semibold text-primary">
+                POST /api/webhooks/flutterwave
+              </code>
+            </p>
+            <p className="text-text-muted">
               Uses server-side <code className="font-mono">FLUTTERWAVE_SECRET_KEY</code> and{' '}
-              <code className="font-mono">FLUTTERWAVE_SECRET_HASH</code> for automated Uganda MoMo &amp; Card callback verification.
+              <code className="font-mono">FLUTTERWAVE_SECRET_HASH</code> with durable disk persistence across server restarts.
             </p>
           </div>
         </div>
 
         {/* Transactional Email & WhatsApp Transport */}
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 space-y-4">
+        <div className="bg-surface border border-border rounded-xl p-5 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
-              <Mail size={18} className="text-[#0F766E]" />
-              <h2 className="text-sm font-bold text-[#0F1E33]">
+              <Mail size={18} className="text-accent" />
+              <h2 className="text-sm font-bold text-primary">
                 Transactional Email &amp; WhatsApp Transport
               </h2>
             </div>
@@ -229,20 +320,20 @@ export default function MasterSystemOps() {
             </button>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#F1F5F9] border border-[#D5DEE9] text-xs space-y-2">
+          <div className="p-4 rounded-xl bg-surface-alt border border-border text-xs space-y-2">
             <div className="flex justify-between">
-              <span className="text-[#64748B]">Transport Status</span>
+              <span className="text-text-muted">Transport Status</span>
               <strong
                 className={
-                  serviceStatus?.configured ? 'text-[#0F766E]' : 'text-red-600'
+                  serviceStatus?.configured ? 'text-accent' : 'text-danger'
                 }
               >
                 {serviceStatus?.configured ? 'Configured & Ready' : 'Not Configured'}
               </strong>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#64748B]">Active Provider</span>
-              <span className="font-mono font-bold text-[#0F1E33]">
+              <span className="text-text-muted">Active Provider</span>
+              <span className="font-mono font-bold text-primary">
                 {serviceStatus?.configured
                   ? `${serviceStatus.provider.toUpperCase()}${
                       serviceStatus.host ? ` (${serviceStatus.host})` : ''
@@ -251,14 +342,14 @@ export default function MasterSystemOps() {
               </span>
             </div>
             <div className="flex justify-between gap-3">
-              <span className="text-[#64748B]">Sender Address</span>
-              <span className="font-mono text-[#0F1E33] truncate">
+              <span className="text-text-muted">Sender Address</span>
+              <span className="font-mono text-primary truncate">
                 {serviceStatus?.fromAddress || '—'}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#64748B]">WhatsApp Cloud API</span>
-              <span className="font-semibold text-[#0F1E33]">
+              <span className="text-text-muted">WhatsApp Cloud API</span>
+              <span className="font-semibold text-primary">
                 {serviceStatus?.whatsappConfigured
                   ? 'API Live'
                   : 'Pre-filled wa.me links'}
@@ -267,20 +358,20 @@ export default function MasterSystemOps() {
           </div>
 
           {!serviceStatus?.configured && (
-            <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-xs text-[#0F1E33] space-y-1">
+            <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs text-primary space-y-1">
               <p className="font-bold">Environment Secrets Required for Email:</p>
-              <p>
-                Set <code className="font-mono font-bold">RESEND_API_KEY</code> (+ optional{' '}
-                <code className="font-mono font-bold">RESEND_FROM</code>) or{' '}
-                <code className="font-mono font-bold">SMTP_USER</code> /{' '}
-                <code className="font-mono font-bold">SMTP_PASS</code> on the server.
+              <p className="text-text-secondary">
+                Set <code className="font-mono font-bold text-primary">RESEND_API_KEY</code> (+ optional{' '}
+                <code className="font-mono font-bold text-primary">RESEND_FROM</code>) or{' '}
+                <code className="font-mono font-bold text-primary">SMTP_USER</code> /{' '}
+                <code className="font-mono font-bold text-primary">SMTP_PASS</code> on the server.
               </p>
             </div>
           )}
 
           <form onSubmit={handleSendTest} className="space-y-3">
             <div>
-              <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+              <label className="block text-xs font-bold text-primary mb-1">
                 Send Verification Test Email To
               </label>
               <div className="flex flex-col sm:flex-row gap-2">
@@ -288,7 +379,7 @@ export default function MasterSystemOps() {
                   type="email"
                   required
                   className="input flex-1 text-xs"
-                  placeholder="davidmagero22@gmail.com"
+                  placeholder="owner@business.co.ug"
                   value={testEmailTo}
                   onChange={(e) => setTestEmailTo(e.target.value)}
                 />
@@ -308,8 +399,8 @@ export default function MasterSystemOps() {
                 className={cn(
                   'p-3 rounded-lg text-xs font-medium border',
                   testEmailResult.ok
-                    ? 'bg-[#0F766E]/10 border-[#0F766E]/30 text-[#0F1E33]'
-                    : 'bg-red-50 border-red-200 text-red-700'
+                    ? 'bg-accent/10 border-accent/30 text-primary'
+                    : 'bg-danger/10 border-danger/30 text-danger'
                 )}
               >
                 {testEmailResult.message}

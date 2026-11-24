@@ -1,14 +1,19 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Plus Jakarta Sans", "Manrope", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
   --color-primary: #0B1F3A;
+  --color-brand-primary: #0B1F3A;
   --color-accent: #0F766E;
+  --color-brand-accent: #0F766E;
   --color-accent-alt: #B45309;
+  --color-canvas: #EDF1F6;
   --color-surface: #FBFDFF;
   --color-surface-alt: #E5EBF3;
+  --color-surface-elevated: #FFFFFF;
   --color-border: #D5DEE9;
   --color-text-primary: #0F1E33;
   --color-text-secondary: #475569;
@@ -31,14 +36,51 @@
   --breakpoint-2xl: 1536px;
 }
 
+:root {
+  --color-canvas: #EDF1F6;
+  --color-surface: #FBFDFF;
+  --color-surface-alt: #E5EBF3;
+  --color-surface-elevated: #FFFFFF;
+  --color-border: #D5DEE9;
+  --color-text-primary: #0F1E33;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748B;
+  --color-input-bg: #F8FAFC;
+  --color-input-focus: #FFFFFF;
+  --color-skeleton-base: #E5EBF3;
+  --color-skeleton-shine: rgba(251, 253, 255, 0.65);
+}
+
+.dark {
+  --color-canvas: #090F1A;
+  --color-surface: #111A2B;
+  --color-surface-alt: #18243A;
+  --color-surface-elevated: #172338;
+  --color-border: #25344E;
+  --color-text-primary: #F1F5F9;
+  --color-text-secondary: #CBD5E1;
+  --color-text-muted: #94A3B8;
+  --color-input-bg: #0D1524;
+  --color-input-focus: #131F33;
+  --color-skeleton-base: #1D2B42;
+  --color-skeleton-shine: rgba(148, 163, 184, 0.16);
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
 @layer base {
   body {
-    @apply bg-[#EDF1F6] text-primary font-sans antialiased;
+    @apply bg-canvas text-text-primary font-sans antialiased transition-colors duration-150;
     font-size: max(0.875rem, 14px);
   }
 
   h1, h2, h3, h4, h5, h6 {
-    @apply font-bold tracking-tight text-primary;
+    @apply font-bold tracking-tight text-text-primary;
+  }
+
+  .dark option,
+  .dark optgroup {
+    background-color: #111A2B;
+    color: #F1F5F9;
   }
 
   @media (max-width: 767px) {
@@ -65,19 +107,29 @@
   }
 
   .btn-secondary {
-    @apply bg-surface border border-border text-primary hover:bg-surface-alt;
+    @apply bg-surface border border-border text-text-primary hover:bg-surface-alt;
   }
 
   .btn-ghost {
-    @apply text-primary hover:bg-surface-alt;
+    @apply text-text-primary hover:bg-surface-alt;
   }
 
   .input {
-    @apply w-full px-3 py-2 bg-[#F8FAFC] border border-border rounded-md focus:bg-white focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all min-h-[44px] sm:min-h-[46px];
+    background-color: var(--color-input-bg);
+    color: var(--color-text-primary);
+    @apply w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent/25 focus:border-accent transition-all min-h-[44px] sm:min-h-[46px];
+  }
+  .input:focus {
+    background-color: var(--color-input-focus);
   }
 
   .input-sm {
-    @apply w-full px-2.5 py-1.5 bg-[#F8FAFC] border border-border rounded-md focus:bg-white focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all min-h-[36px] text-xs;
+    background-color: var(--color-input-bg);
+    color: var(--color-text-primary);
+    @apply w-full px-2.5 py-1.5 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-accent/25 focus:border-accent transition-all min-h-[36px] text-xs;
+  }
+  .input-sm:focus {
+    background-color: var(--color-input-focus);
   }
 
   /* Responsive Grids */
@@ -134,11 +186,12 @@
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
   }
+
   /* Skeleton Shimmer (GPU-composited sweep, reduced-motion safe) */
   .skeleton {
     position: relative;
     overflow: hidden;
-    background-color: #E5EBF3;
+    background-color: var(--color-skeleton-base);
     border-radius: 6px;
   }
 
@@ -149,9 +202,9 @@
     transform: translateX(-100%);
     background: linear-gradient(
       90deg,
-      rgba(251, 253, 255, 0) 0%,
-      rgba(251, 253, 255, 0.65) 50%,
-      rgba(251, 253, 255, 0) 100%
+      rgba(255, 255, 255, 0) 0%,
+      var(--color-skeleton-shine) 50%,
+      rgba(255, 255, 255, 0) 100%
     );
     animation: skeleton-shimmer 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
     will-change: transform;
@@ -180,6 +233,31 @@
   }
 }
 
+/* Dark-mode compatibility guarantees across semantic primary text, subtle tints, and Recharts */
+.dark .text-primary {
+  color: var(--color-text-primary);
+}
+.dark .bg-primary .text-primary,
+.dark .bg-white .text-primary {
+  color: #0F1E33;
+}
+.dark .recharts-default-tooltip {
+  background-color: #162238 !important;
+  border-color: #25344E !important;
+  color: #F1F5F9 !important;
+}
+.dark .recharts-tooltip-label,
+.dark .recharts-tooltip-item {
+  color: #F1F5F9 !important;
+}
+.dark .recharts-cartesian-grid line {
+  stroke: #25344E !important;
+}
+.dark .recharts-cartesian-axis-tick-value,
+.dark .recharts-text {
+  fill: #94A3B8;
+}
+
 @keyframes skeleton-shimmer {
   0% {
     transform: translateX(-100%);
@@ -199,10 +277,16 @@
 
 @media print {
   .no-print { display: none !important; }
+  body {
+    background: #FFFFFF !important;
+    color: #0F172A !important;
+  }
   .print-content {
     width: 100%;
     max-width: 210mm;
     margin: 0 auto;
     padding: 20mm;
+    background: #FFFFFF !important;
+    color: #0F172A !important;
   }
 }

@@ -15,9 +15,11 @@ import {
   ClipboardPaste,
 } from 'lucide-react';
 import {
+  Product,
   SmartImportEntityType,
   SmartImportExtractResult,
   SmartImportFieldMapping,
+  SmartImportReconciledRow,
 } from '../../types';
 import {
   SMART_ENTITY_CONFIGS,
@@ -26,6 +28,14 @@ import {
   tryParseStructuredTextLocally,
   validateSmartImportRow,
 } from '../../utils/smartImportParser';
+import {
+  ReconcileContext,
+  applyUpdatedProductsFromImport,
+  captureTenantIdSnapshot,
+  reconcileSmartImportRows,
+  recordDiffImportSnapshot,
+} from '../../utils/smartImportReconciler';
+import { localDb } from '../../services/db';
 import { readAnyFileAsBase64, smartImportExtract } from '../../services/aiService';
 import { useAuthStore } from '../../store/authStore';
 import { canUseAiCall, incrementDailyAiUsage } from '../../utils/planLimits';
@@ -76,9 +86,14 @@ export function SmartImportModal({
   const [extractError, setExtractError] = useState('');
 
   const [extractResult, setExtractResult] = useState<SmartImportExtractResult | null>(null);
+  const [activeTableIndex, setActiveTableIndex] = useState(0);
   const [mappings, setMappings] = useState<SmartImportFieldMapping[]>([]);
   const [rows, setRows] = useState<Array<Record<string, any>>>([]);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [reconcileCtx, setReconcileCtx] = useState<ReconcileContext>({});
+  const [resolutions, setResolutions] = useState<
+    Record<number, 'overwrite' | 'keep_existing' | 'create_new'>
+  >({});
 
   // Entity-specific commit options
   const [deductStock, setDeductStock] = useState(false);
@@ -86,6 +101,40 @@ export function SmartImportModal({
   const [markReceived, setMarkReceived] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (!isOpen || step !== 'review' || !tenant?.id) return;
+    let cancelled = false;
+    (async () => {
+      const tid = tenant.id;
+      const [products, customers, suppliers, sales, purchases, expenses] = await Promise.all([
+        entityType === 'products' ? localDb.products.where('tenantId').equals(tid).toArray() : Promise.resolve([]),
+        entityType === 'customers' ? localDb.customers.where('tenantId').equals(tid).toArray() : Promise.resolve([]),
+        entityType === 'suppliers' ? localDb.suppliers.where('tenantId').equals(tid).toArray() : Promise.resolve([]),
+        entityType === 'sales' || entityType === 'refunds'
+          ? localDb.sales.where('tenantId').equals(tid).toArray()
+          : Promise.resolve([]),
+        entityType === 'purchases'
+          ? localDb.purchaseOrders.where('tenantId').equals(tid).toArray()
+          : Promise.resolve([]),
+        entityType === 'expenses' ? localDb.expenses.where('tenantId').equals(tid).toArray() : Promise.resolve([]),
+      ]);
+      if (!cancelled) {
+        setReconcileCtx({ products, customers, suppliers, sales, purchases, expenses });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, step, tenant?.id, entityType]);
+
+  const reconciledRows: SmartImportReconciledRow[] = useMemo(() => {
+    const base = reconcileSmartImportRows(entityType, rows, reconcileCtx);
+    return base.map((item) => ({
+      ...item,
+      resolution: resolutions[item.rowIndex] || item.resolution,
+    }));
+  }, [entityType, rows, reconcileCtx, resolutions]);
 
   const existingEmailSet = useMemo(
     () => new Set(existingEmails.map((e) => e.trim().toLowerCase()).filter(Boolean)),
@@ -130,9 +179,23 @@ export function SmartImportModal({
     });
   }, [rows, entityType, existingEmailSet]);
 
-  const validSelectedRows = useMemo(() => {
-    return rows.filter((_, idx) => selectedIndices.has(idx) && !rowErrors[idx]);
-  }, [rows, selectedIndices, rowErrors]);
+  const activeSelectedIndices = useMemo(() => {
+    const kept: number[] = [];
+    rows.forEach((_, idx) => {
+      if (!selectedIndices.has(idx) || rowErrors[idx]) return;
+      const rec = reconciledRows[idx];
+      if (rec && rec.resolution === 'keep_existing' && rec.action !== 'create') {
+        return;
+      }
+      kept.push(idx);
+    });
+    return kept;
+  }, [rows, selectedIndices, rowErrors, reconciledRows]);
+
+  const validSelectedRows = useMemo(
+    () => activeSelectedIndices.map((idx) => rows[idx]),
+    [activeSelectedIndices, rows]
+  );
 
   const invalidCount = useMemo(
     () => rowErrors.filter((err, idx) => selectedIndices.has(idx) && Boolean(err)).length,
@@ -147,8 +210,10 @@ export function SmartImportModal({
     setPastedText('');
     setExtractError('');
     setExtractResult(null);
+    setActiveTableIndex(0);
     setMappings([]);
     setRows([]);
+    setResolutions({});
     setSelectedIndices(new Set());
     setDeductStock(false);
     setRestoreStock(false);
@@ -162,12 +227,28 @@ export function SmartImportModal({
 
   const applyExtractToReview = (result: SmartImportExtractResult) => {
     setExtractResult(result);
-    setMappings(result.fieldMappings || []);
-    setRows(result.rows || []);
+    setActiveTableIndex(0);
+    setResolutions({});
+    const initialRows = result.multiTables?.[0]?.rows || result.rows || [];
+    const initialMappings = result.multiTables?.[0]?.fieldMappings || result.fieldMappings || [];
+    setMappings(initialMappings);
+    setRows(initialRows);
     const initialSelected = new Set<number>();
-    (result.rows || []).forEach((_, idx) => initialSelected.add(idx));
+    initialRows.forEach((_, idx) => initialSelected.add(idx));
     setSelectedIndices(initialSelected);
     setStep('review');
+  };
+
+  const handleSelectTableBatch = (index: number) => {
+    const batch = extractResult?.multiTables?.[index];
+    if (!batch) return;
+    setActiveTableIndex(index);
+    setResolutions({});
+    setMappings(batch.fieldMappings || []);
+    setRows(batch.rows || []);
+    const nextSel = new Set<number>();
+    (batch.rows || []).forEach((_, idx) => nextSel.add(idx));
+    setSelectedIndices(nextSel);
   };
 
   const runAiExtraction = async (params: {
@@ -344,18 +425,66 @@ export function SmartImportModal({
   };
 
   const handleCommit = async () => {
-    if (validSelectedRows.length === 0) {
-      toast.error('Select at least one valid row to import');
+    if (activeSelectedIndices.length === 0) {
+      toast.error('Select at least one non-skipped valid row to import');
       return;
     }
     setIsCommitting(true);
     try {
-      const count = await onCommit(validSelectedRows, {
-        deductStock,
-        restoreStock,
-        markReceived,
+      const productOverwrites: Array<{ existing: Product; incoming: Record<string, any> }> = [];
+      const rowsToCreate: Array<Record<string, any>> = [];
+      const productById = new Map<string, Product>(
+        (reconcileCtx.products || []).map((p): [string, Product] => [p.id, p])
+      );
+
+      activeSelectedIndices.forEach((idx) => {
+        const rec = reconciledRows[idx];
+        const row = rows[idx];
+        if (
+          entityType === 'products' &&
+          rec?.resolution === 'overwrite' &&
+          rec.matchedRecordId &&
+          productById.has(rec.matchedRecordId)
+        ) {
+          productOverwrites.push({
+            existing: productById.get(rec.matchedRecordId)!,
+            incoming: row,
+          });
+        } else {
+          rowsToCreate.push(row);
+        }
       });
-      if (count > 0) {
+
+      const beforeSnapshot = tenant?.id ? await captureTenantIdSnapshot(tenant.id) : null;
+      let totalChanged = 0;
+
+      if (tenant?.id && productOverwrites.length > 0) {
+        const updatedCount = await applyUpdatedProductsFromImport(tenant.id, productOverwrites);
+        totalChanged += updatedCount;
+        if (updatedCount > 0) {
+          toast.success(`Updated ${updatedCount} existing product(s)`);
+        }
+      }
+
+      if (rowsToCreate.length > 0) {
+        const count = await onCommit(rowsToCreate, {
+          deductStock,
+          restoreStock,
+          markReceived,
+        });
+        totalChanged += count;
+      }
+
+      if (tenant?.id && beforeSnapshot && totalChanged > 0) {
+        await recordDiffImportSnapshot(
+          tenant.id,
+          entityType,
+          selectedFile?.name || `Smart Import (${config.title})`,
+          beforeSnapshot
+        );
+      }
+
+      if (totalChanged > 0) {
         handleClose();
       }
     } finally {
@@ -363,9 +492,13 @@ export function SmartImportModal({
     }
   };
 
+  const activeBatch = extractResult?.multiTables?.[activeTableIndex];
+  const activeRawSpreadsheetRows =
+    activeBatch?.rawSpreadsheetRows || extractResult?.rawSpreadsheetRows;
+
   return (
     <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-[#FBFDFF] rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92dvh] overflow-hidden flex flex-col border border-border">
+      <div className="bg-surface rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92dvh] overflow-hidden flex flex-col border border-border">
         {/* Header */}
         <div className="px-4 sm:px-6 py-4 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
           <div className="flex items-center gap-3 min-w-0">
@@ -487,7 +620,7 @@ export function SmartImportModal({
                           void handleAnalyzePastedText();
                         }
                       }}
-                      className="px-2.5 py-1 rounded border border-danger/40 bg-white text-danger font-semibold hover:bg-danger/5 whitespace-nowrap shrink-0"
+                      className="px-2.5 py-1 rounded border border-danger/40 bg-surface text-danger font-semibold hover:bg-danger/5 whitespace-nowrap shrink-0"
                     >
                       {isExtracting ? 'Retrying...' : 'Retry'}
                     </button>
@@ -625,6 +758,47 @@ export function SmartImportModal({
                 </div>
               </div>
 
+              {/* Multi-table PDF batch switcher */}
+              {extractResult?.multiTables && extractResult.multiTables.length > 1 && (
+                <div className="p-3 rounded-xl bg-surface-alt/70 border border-border space-y-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-text-muted">
+                    Detected {extractResult.multiTables.length} Distinct Tables in Document
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {extractResult.multiTables.map((batch, idx) => (
+                      <button
+                        key={batch.tableId || idx}
+                        type="button"
+                        onClick={() => handleSelectTableBatch(idx)}
+                        className={cn(
+                          'px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap',
+                          activeTableIndex === idx
+                            ? 'bg-primary text-white border-primary'
+                            : 'bg-surface text-primary border-border hover:border-accent'
+                        )}
+                      >
+                        {batch.sectionTitle || `Table ${idx + 1}`} · {batch.rows.length} rows
+                        {batch.pageRange ? ` (p.${batch.pageRange})` : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Skipped computed summary tables notice */}
+              {extractResult?.skippedTables && extractResult.skippedTables.length > 0 && (
+                <div className="p-3 rounded-xl bg-surface-alt border border-border text-xs text-text-secondary space-y-1">
+                  <p className="font-bold text-primary">
+                    Skipped {extractResult.skippedTables.length} Computed Summary Table(s)
+                  </p>
+                  {extractResult.skippedTables.map((st, idx) => (
+                    <p key={idx} className="text-[11px] text-text-muted">
+                      • {st.sectionTitle} {st.pageRange ? `(p.${st.pageRange})` : ''}: {st.reason} ({st.rowCount} summary rows)
+                    </p>
+                  ))}
+                </div>
+              )}
+
               {/* Warnings from AI */}
               {extractResult?.warnings && extractResult.warnings.length > 0 && (
                 <div className="p-3 rounded-xl bg-accent-alt/10 border border-accent-alt/30 text-xs text-primary space-y-1">
@@ -638,10 +812,10 @@ export function SmartImportModal({
               )}
 
               {/* Column Field Mapping Adjuster (for tabular datasets) */}
-              {extractResult?.rawSpreadsheetRows &&
-                extractResult.rawSpreadsheetRows.length > 0 &&
+              {activeRawSpreadsheetRows &&
+                activeRawSpreadsheetRows.length > 0 &&
                 mappings.length > 0 && (
-                  <div className="p-3.5 rounded-xl border border-border bg-[#FBFDFF] space-y-2.5">
+                  <div className="p-3.5 rounded-xl border border-border bg-surface space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs font-bold text-primary uppercase tracking-wider">
                         Smart Column Mapping (Verify or Adjust)
@@ -664,7 +838,7 @@ export function SmartImportModal({
                             aria-label={`Map column ${m.sourceHeader}`}
                             value={m.targetField}
                             onChange={(e) => handleReMapColumn(m.sourceHeader, e.target.value)}
-                            className="bg-white border border-border rounded px-1.5 py-1 sm:py-0.5 text-xs font-medium text-primary max-w-[160px]"
+                            className="bg-surface border border-border rounded px-1.5 py-1 sm:py-0.5 text-xs font-medium text-primary max-w-[160px]"
                           >
                             <option value="ignore">Ignore</option>
                             {config.fields.map((f) => (
@@ -758,6 +932,7 @@ export function SmartImportModal({
                             {field.required ? ' *' : ''}
                           </th>
                         ))}
+                        <th className="px-3 py-2.5 font-bold text-text-muted uppercase tracking-wider">DB Match</th>
                         <th className="px-3 py-2.5 font-bold text-text-muted uppercase tracking-wider">Status</th>
                         <th className="px-2.5 py-2.5 w-10" />
                       </tr>
@@ -766,6 +941,7 @@ export function SmartImportModal({
                       {rows.map((row, idx) => {
                         const rowErr = rowErrors[idx];
                         const isChecked = selectedIndices.has(idx);
+                        const rec = reconciledRows[idx];
                         return (
                           <tr
                             key={idx}
@@ -796,7 +972,7 @@ export function SmartImportModal({
                                   <select
                                     value={String(row[field.key] ?? field.options[0])}
                                     onChange={(e) => handleCellEdit(idx, field.key, e.target.value)}
-                                    className="w-full border border-border rounded px-1.5 py-1 bg-white text-xs text-primary min-w-[96px]"
+                                    className="w-full border border-border rounded px-1.5 py-1 bg-surface text-xs text-primary min-w-[96px]"
                                   >
                                     {field.options.map((opt) => (
                                       <option key={opt} value={opt}>
@@ -810,7 +986,7 @@ export function SmartImportModal({
                                     value={row[field.key] ?? ''}
                                     onChange={(e) => handleCellEdit(idx, field.key, e.target.value)}
                                     className={cn(
-                                      'w-full border border-border rounded px-2 py-1 text-xs text-primary bg-white min-w-[90px]',
+                                      'w-full border border-border rounded px-2 py-1 text-xs text-primary bg-surface min-w-[90px]',
                                       field.type === 'number' && 'font-mono tabular-nums text-right min-w-[76px]'
                                     )}
                                   />
@@ -818,8 +994,48 @@ export function SmartImportModal({
                               </td>
                             ))}
                             <td className="px-3 py-2 whitespace-nowrap">
+                              {!rec || rec.action === 'create' ? (
+                                <span className="inline-flex px-2 py-0.5 rounded bg-accent/10 text-accent font-semibold">
+                                  New
+                                </span>
+                              ) : (
+                                <div className="flex flex-col gap-1">
+                                  <span
+                                    title={rec.matchReason}
+                                    className={cn(
+                                      'inline-flex w-fit px-1.5 py-0.5 rounded text-[10px] font-bold uppercase',
+                                      rec.action === 'conflict'
+                                        ? 'bg-accent-alt/15 text-accent-alt'
+                                        : rec.action === 'link'
+                                        ? 'bg-primary/10 text-primary'
+                                        : 'bg-surface-alt text-text-muted'
+                                    )}
+                                  >
+                                    {rec.action}
+                                  </span>
+                                  <select
+                                    aria-label={`Resolution for row ${idx + 1}`}
+                                    value={rec.resolution || 'keep_existing'}
+                                    onChange={(e) =>
+                                      setResolutions((prev) => ({
+                                        ...prev,
+                                        [idx]: e.target.value as 'overwrite' | 'keep_existing' | 'create_new',
+                                      }))
+                                    }
+                                    className="border border-border rounded px-1.5 py-0.5 text-[11px] bg-surface text-primary"
+                                  >
+                                    <option value="keep_existing">Skip / Keep Existing</option>
+                                    {entityType === 'products' && <option value="overwrite">Update Existing</option>}
+                                    <option value="create_new">Create New</option>
+                                  </select>
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">
                               {rowErr ? (
                                 <span className="text-danger font-semibold">{rowErr}</span>
+                              ) : rec?.resolution === 'keep_existing' && rec.action !== 'create' ? (
+                                <span className="text-text-muted font-medium">Skipped</span>
                               ) : (
                                 <span className="text-accent font-semibold">Ready</span>
                               )}

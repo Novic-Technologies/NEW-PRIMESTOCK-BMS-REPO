@@ -84,10 +84,10 @@ export default function MasterOverview() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[#0F1E33] tracking-tight">
+          <h1 className="text-2xl font-bold text-primary tracking-tight">
             Platform Control Overview
           </h1>
-          <p className="text-sm text-[#475569] mt-0.5">
+          <p className="text-sm text-text-secondary mt-0.5">
             Real-time health, recurring revenue, and subscription tier governance across all merchant businesses.
           </p>
         </div>
@@ -105,63 +105,63 @@ export default function MasterOverview() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4">
-          <div className="flex items-center justify-between text-[#64748B] text-xs font-semibold uppercase">
+        <div className="bg-surface border border-border rounded-xl p-4">
+          <div className="flex items-center justify-between text-text-muted text-xs font-semibold uppercase">
             <span>Total Businesses</span>
             <Building2 size={16} />
           </div>
-          <p className="text-2xl font-bold text-[#0F1E33] font-mono tabular-nums mt-2">
+          <p className="text-2xl font-bold text-primary font-mono tabular-nums mt-2">
             {isLoading ? <KpiValueSkeleton className="w-16" /> : metrics.total}
           </p>
-          <p className="text-xs text-[#64748B] mt-1">
+          <p className="text-xs text-text-muted mt-1">
             {metrics.activePaid} active · {metrics.trials} trial
           </p>
         </div>
 
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4">
-          <div className="flex items-center justify-between text-[#64748B] text-xs font-semibold uppercase">
+        <div className="bg-surface border border-border rounded-xl p-4">
+          <div className="flex items-center justify-between text-text-muted text-xs font-semibold uppercase">
             <span>Platform MRR</span>
-            <TrendingUp size={16} className="text-[#0F766E]" />
+            <TrendingUp size={16} className="text-accent" />
           </div>
-          <p className="text-2xl font-bold text-[#0F766E] font-mono tabular-nums mt-2">
+          <p className="text-2xl font-bold text-accent font-mono tabular-nums mt-2">
             {isLoading ? <KpiValueSkeleton className="w-28" /> : formatUGX(metrics.mrrUgx)}
           </p>
-          <p className="text-xs text-[#64748B] mt-1">Monthly recurring revenue</p>
+          <p className="text-xs text-text-muted mt-1">Monthly recurring revenue</p>
         </div>
 
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4">
-          <div className="flex items-center justify-between text-[#64748B] text-xs font-semibold uppercase">
+        <div className="bg-surface border border-border rounded-xl p-4">
+          <div className="flex items-center justify-between text-text-muted text-xs font-semibold uppercase">
             <span>Pending Upgrades</span>
-            <CheckCircle2 size={16} className="text-amber-600" />
+            <CheckCircle2 size={16} className="text-amber-600 dark:text-amber-400" />
           </div>
-          <p className="text-2xl font-bold text-[#0F1E33] font-mono tabular-nums mt-2">
+          <p className="text-2xl font-bold text-primary font-mono tabular-nums mt-2">
             {isLoading ? <KpiValueSkeleton className="w-14" /> : metrics.pendingApprovals}
           </p>
-          <p className="text-xs text-[#64748B] mt-1">Awaiting payment review</p>
+          <p className="text-xs text-text-muted mt-1">Awaiting payment review</p>
         </div>
 
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4">
-          <div className="flex items-center justify-between text-[#64748B] text-xs font-semibold uppercase">
+        <div className="bg-surface border border-border rounded-xl p-4">
+          <div className="flex items-center justify-between text-text-muted text-xs font-semibold uppercase">
             <span>Expiring Soon</span>
-            <Clock size={16} className="text-amber-600" />
+            <Clock size={16} className="text-amber-600 dark:text-amber-400" />
           </div>
-          <p className="text-2xl font-bold text-[#0F1E33] font-mono tabular-nums mt-2">
+          <p className="text-2xl font-bold text-primary font-mono tabular-nums mt-2">
             {isLoading ? <KpiValueSkeleton className="w-14" /> : metrics.expiringSoon}
           </p>
-          <p className="text-xs text-[#64748B] mt-1">
+          <p className="text-xs text-text-muted mt-1">
             Within {plansConfig.reminderLeadDays} day(s)
           </p>
         </div>
 
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4">
-          <div className="flex items-center justify-between text-[#64748B] text-xs font-semibold uppercase">
+        <div className="bg-surface border border-border rounded-xl p-4">
+          <div className="flex items-center justify-between text-text-muted text-xs font-semibold uppercase">
             <span>Locked / Expired</span>
-            <Lock size={16} className="text-red-600" />
+            <Lock size={16} className="text-danger" />
           </div>
-          <p className="text-2xl font-bold text-[#0F1E33] font-mono tabular-nums mt-2">
+          <p className="text-2xl font-bold text-primary font-mono tabular-nums mt-2">
             {isLoading ? <KpiValueSkeleton className="w-14" /> : metrics.lockedOrExpired}
           </p>
-          <p className="text-xs text-[#64748B] mt-1">
+          <p className="text-xs text-text-muted mt-1">
             {plansConfig.strictEnforcement ? 'Strict quota mode ON' : 'Soft quota mode'}
           </p>
         </div>
@@ -169,19 +169,19 @@ export default function MasterOverview() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Tier Distribution & Active Rules */}
-        <div className="lg:col-span-7 bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-[#D5DEE9] flex items-center justify-between gap-2">
+        <div className="lg:col-span-7 bg-surface border border-border rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-2">
             <div>
-              <h2 className="text-sm font-bold text-[#0F1E33]">
+              <h2 className="text-sm font-bold text-primary">
                 Subscription Tier Distribution &amp; Quotas
               </h2>
-              <p className="text-xs text-[#64748B]">
+              <p className="text-xs text-text-muted">
                 Live enforcement thresholds configured in Tiers &amp; Upgrade Paths.
               </p>
             </div>
             <Link
               to="/master/plans"
-              className="text-xs font-semibold text-[#0F766E] hover:underline flex items-center gap-1 whitespace-nowrap"
+              className="text-xs font-semibold text-accent hover:underline flex items-center gap-1 whitespace-nowrap"
             >
               Edit Quotas
               <ArrowUpRight size={13} />
@@ -189,41 +189,41 @@ export default function MasterOverview() {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse min-w-[560px]">
-              <thead className="bg-[#F1F5F9] border-b border-[#D5DEE9]">
+              <thead className="bg-surface-alt border-b border-border">
                 <tr>
-                  <th className="p-3 font-bold text-[#475569] uppercase">Tier</th>
-                  <th className="p-3 font-bold text-[#475569] uppercase text-right">Monthly Fee</th>
-                  <th className="p-3 font-bold text-[#475569] uppercase text-right">SKUs / Users / Branches</th>
-                  <th className="p-3 font-bold text-[#475569] uppercase text-right">Orgs</th>
-                  <th className="p-3 font-bold text-[#475569] uppercase text-right">Tier MRR</th>
+                  <th className="p-3 font-bold text-text-secondary uppercase">Tier</th>
+                  <th className="p-3 font-bold text-text-secondary uppercase text-right">Monthly Fee</th>
+                  <th className="p-3 font-bold text-text-secondary uppercase text-right">SKUs / Users / Branches</th>
+                  <th className="p-3 font-bold text-text-secondary uppercase text-right">Orgs</th>
+                  <th className="p-3 font-bold text-text-secondary uppercase text-right">Tier MRR</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#D5DEE9]">
+              <tbody className="divide-y divide-border">
                 {PLAN_ORDER.map((planId) => {
                   const tier = plansConfig.tiers[planId];
                   const stats = metrics.byPlan[planId];
                   return (
-                    <tr key={planId} className="hover:bg-[#F1F5F9]">
+                    <tr key={planId} className="hover:bg-surface-alt">
                       <td className="p-3">
-                        <p className="font-bold text-[#0F1E33]">{tier.name}</p>
-                        <p className="text-[11px] text-[#64748B]">
+                        <p className="font-bold text-primary">{tier.name}</p>
+                        <p className="text-[11px] text-text-muted">
                           Upgrades →{' '}
                           {tier.allowedUpgradeTargets.length > 0
                             ? tier.allowedUpgradeTargets.map((t) => plansConfig.tiers[t].name).join(', ')
                             : 'Top Tier'}
                         </p>
                       </td>
-                      <td className="p-3 text-right font-mono tabular-nums font-semibold text-[#0F1E33]">
+                      <td className="p-3 text-right font-mono tabular-nums font-semibold text-primary">
                         {formatUGX(tier.monthlyPriceUgx)}
                       </td>
-                      <td className="p-3 text-right font-mono tabular-nums text-[#475569]">
+                      <td className="p-3 text-right font-mono tabular-nums text-text-secondary">
                         {formatLimitDisplay(tier.maxProducts)} / {formatLimitDisplay(tier.maxUsers)} /{' '}
                         {formatLimitDisplay(tier.maxBranches)}
                       </td>
-                      <td className="p-3 text-right font-mono tabular-nums font-bold text-[#0F1E33]">
+                      <td className="p-3 text-right font-mono tabular-nums font-bold text-primary">
                         {stats.count}
                       </td>
-                      <td className="p-3 text-right font-mono tabular-nums font-bold text-[#0F766E]">
+                      <td className="p-3 text-right font-mono tabular-nums font-bold text-accent">
                         {formatUGX(stats.mrr)}
                       </td>
                     </tr>
@@ -235,19 +235,19 @@ export default function MasterOverview() {
         </div>
 
         {/* Pending Payment Queue Snapshot */}
-        <div className="lg:col-span-5 bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl overflow-hidden flex flex-col justify-between">
+        <div className="lg:col-span-5 bg-surface border border-border rounded-xl overflow-hidden flex flex-col justify-between">
           <div>
-            <div className="px-5 py-4 border-b border-[#D5DEE9] flex items-center justify-between">
-              <h2 className="text-sm font-bold text-[#0F1E33]">Pending Payment Approvals</h2>
+            <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+              <h2 className="text-sm font-bold text-primary">Pending Payment Approvals</h2>
               <Link
                 to="/master/approvals"
-                className="text-xs font-semibold text-[#0F766E] hover:underline flex items-center gap-1 whitespace-nowrap"
+                className="text-xs font-semibold text-accent hover:underline flex items-center gap-1 whitespace-nowrap"
               >
                 Open Queue
                 <ArrowUpRight size={13} />
               </Link>
             </div>
-            <div className="divide-y divide-[#D5DEE9]">
+            <div className="divide-y divide-border">
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, idx) => (
                   <div key={idx} className="px-5 py-3 flex items-center justify-between gap-3">
@@ -259,20 +259,20 @@ export default function MasterOverview() {
                   </div>
                 ))
               ) : pendingOrgs.length === 0 ? (
-                <div className="p-8 text-center text-xs text-[#64748B]">
+                <div className="p-8 text-center text-xs text-text-muted">
                   All submitted subscription payments have been reviewed.
                 </div>
               ) : (
                 pendingOrgs.map((org) => (
                   <div key={org.id} className="px-5 py-3 flex items-center justify-between gap-3 text-xs">
                     <div className="min-w-0">
-                      <p className="font-bold text-[#0F1E33] truncate">{org.name}</p>
-                      <p className="text-[11px] text-[#64748B] truncate">
+                      <p className="font-bold text-primary truncate">{org.name}</p>
+                      <p className="text-[11px] text-text-muted truncate">
                         {getPlanQuota(org.pendingPlan).name} · Ref: {org.pendingPaymentRef || '—'} ·{' '}
                         {org.pendingSubmittedAt ? formatDate(org.pendingSubmittedAt) : 'Recent'}
                       </p>
                     </div>
-                    <span className="font-mono tabular-nums font-bold text-[#0F1E33] shrink-0">
+                    <span className="font-mono tabular-nums font-bold text-primary shrink-0">
                       {formatUGX(
                         org.pendingAmountUgx || getPlanQuota(org.pendingPlan).monthlyPriceUgx
                       )}
@@ -283,23 +283,23 @@ export default function MasterOverview() {
             </div>
           </div>
 
-          <div className="px-5 py-3.5 bg-[#F1F5F9] border-t border-[#D5DEE9] grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+          <div className="px-5 py-3.5 bg-surface-alt border-t border-border grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
             <Link
               to="/master/payments"
-              className="p-2.5 rounded-lg bg-[#FBFDFF] border border-[#D5DEE9] font-semibold text-[#0F1E33] hover:border-[#0F766E] flex items-center justify-between"
+              className="p-2.5 rounded-lg bg-surface border border-border font-semibold text-primary hover:border-accent flex items-center justify-between"
             >
               <span className="flex items-center gap-1.5">
-                <CreditCard size={14} className="text-[#0F766E]" />
+                <CreditCard size={14} className="text-accent" />
                 Payment Channels
               </span>
               <ArrowUpRight size={13} />
             </Link>
             <Link
               to="/master/system"
-              className="p-2.5 rounded-lg bg-[#FBFDFF] border border-[#D5DEE9] font-semibold text-[#0F1E33] hover:border-[#0F766E] flex items-center justify-between"
+              className="p-2.5 rounded-lg bg-surface border border-border font-semibold text-primary hover:border-accent flex items-center justify-between"
             >
               <span className="flex items-center gap-1.5">
-                <AlertTriangle size={14} className="text-amber-600" />
+                <AlertTriangle size={14} className="text-amber-600 dark:text-amber-400" />
                 Expiry Sweep
               </span>
               <ArrowUpRight size={13} />

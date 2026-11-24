@@ -20,6 +20,26 @@
       content="Enterprise-grade, offline-first Business Management System designed for Ugandan businesses. Manage sales, inventory, branches, AI insights, and URA tax compliance."
     />
     <meta property="og:image" content="/assets/aistudio/Minimalist_Navy_Monogram_Emblem_804982e2.png" />
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem('primestock_theme') || 'system';
+          var isDark =
+            pref === 'dark' ||
+            (pref !== 'light' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var root = document.documentElement;
+          root.classList.toggle('dark', Boolean(isDark));
+          root.style.colorScheme = isDark ? 'dark' : 'light';
+          root.dataset.theme = isDark ? 'dark' : 'light';
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) {
+            meta.setAttribute('content', isDark ? '#090F1A' : '#0B1F3A');
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

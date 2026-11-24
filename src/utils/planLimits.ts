@@ -126,29 +126,50 @@ export function isQuotaExceeded(currentCount: number, maxAllowed: number): boole
 }
 
 const AI_USAGE_PREFIX = 'primestock_ai_usage_';
+const syncedAiUsageByKey = new Map<string, number>();
+
+export function setSyncedDailyAiUsage(tenantId: string | undefined, count: number, dateKey?: string) {
+  if (!tenantId || !Number.isFinite(count)) return;
+  const today = dateKey || new Date().toISOString().split('T')[0];
+  const mapKey = `${tenantId}_${today}`;
+  syncedAiUsageByKey.set(mapKey, Math.max(0, Math.round(count)));
+  try {
+    const lsKey = `${AI_USAGE_PREFIX}${tenantId}_${today}`;
+    const existing = Number(localStorage.getItem(lsKey)) || 0;
+    if (count > existing) {
+      localStorage.setItem(lsKey, String(Math.round(count)));
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export function getDailyAiUsageCount(tenantId?: string): number {
   if (!tenantId) return 0;
+  const today = new Date().toISOString().split('T')[0];
+  const mapKey = `${tenantId}_${today}`;
+  const synced = syncedAiUsageByKey.get(mapKey);
   try {
-    const today = new Date().toISOString().split('T')[0];
     const raw = localStorage.getItem(`${AI_USAGE_PREFIX}${tenantId}_${today}`);
-    return Number(raw) || 0;
+    const localCount = Number(raw) || 0;
+    return typeof synced === 'number' ? Math.max(synced, localCount) : localCount;
   } catch {
-    return 0;
+    return typeof synced === 'number' ? synced : 0;
   }
 }
 
 export function incrementDailyAiUsage(tenantId?: string): number {
   if (!tenantId) return 0;
+  const today = new Date().toISOString().split('T')[0];
+  const mapKey = `${tenantId}_${today}`;
+  const next = getDailyAiUsageCount(tenantId) + 1;
+  syncedAiUsageByKey.set(mapKey, next);
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const key = `${AI_USAGE_PREFIX}${tenantId}_${today}`;
-    const next = (Number(localStorage.getItem(key)) || 0) + 1;
-    localStorage.setItem(key, String(next));
-    return next;
+    localStorage.setItem(`${AI_USAGE_PREFIX}${tenantId}_${today}`, String(next));
   } catch {
-    return 0;
+    // Ignore storage errors
   }
+  return next;
 }
 
 export function canUseAiCall(tenant: Tenant | null): {
@@ -169,3 +190,4 @@ export function canUseAiCall(tenant: Tenant | null): {
     limit: quota.aiDailyAllowance,
   };
 }
+

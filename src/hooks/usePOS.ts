@@ -10,6 +10,8 @@ import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
 import { getTrialDaysCount } from '../utils/planLimits';
 import { applyBranchStockDelta, getEffectiveStock } from '../utils/branchStock';
+import { deductFefoBatches, restoreFefoBatches } from '../utils/inventoryMath';
+import { fiscalizeEfrisReceipt } from '../services/aiService';
 import { logWorkspaceAudit } from './useAuditLog';
 import { normalizeIsoDate, normalizeUgPhone } from '../utils/smartImportParser';
 import toast from 'react-hot-toast';
@@ -432,6 +434,7 @@ export function usePOS() {
       changeGiven?: number;
       cashierId?: string;
       cashierName?: string;
+      loyaltyPointsToRedeem?: number;
     }
   ): Promise<Sale | undefined> => {
     if (!user || !tenant || cart.length === 0) return undefined;
@@ -442,10 +445,29 @@ export function usePOS() {
       return undefined;
     }
 
+    const loyaltyEnabled = tenant.preferences?.loyaltyEnabled !== false;
+    const ugxPerPointEarned = Math.max(100, Number(tenant.preferences?.loyaltyPointsPerUgx ?? 10000));
+    const ugxPerPointRedeemed = Math.max(1, Number(tenant.preferences?.loyaltyUgxPerPoint ?? 100));
+
+    let customerRecord: Customer | undefined;
+    if (customerId) {
+      customerRecord = await localDb.customers.get(customerId);
+    }
+
+    const requestedRedeem = Math.max(0, Math.floor(Number(options?.loyaltyPointsToRedeem) || 0));
+    const maxRedeemByBalance = customerRecord ? Math.max(0, customerRecord.loyaltyPoints || 0) : 0;
+    const maxRedeemByTotal = Math.floor(total / ugxPerPointRedeemed);
+    const loyaltyPointsRedeemed =
+      loyaltyEnabled && customerRecord
+        ? Math.min(requestedRedeem, maxRedeemByBalance, maxRedeemByTotal)
+        : 0;
+    const loyaltyDiscountUgx = loyaltyPointsRedeemed * ugxPerPointRedeemed;
+    const netTotal = Math.max(0, total - loyaltyDiscountUgx);
+
     const splitParts = options?.splitPayments?.filter((p) => p.amount > 0) || [];
     const creditPortion =
       paymentMethod === 'Customer Credit'
-        ? total
+        ? netTotal
         : splitParts
             .filter((p) => p.method === 'Customer Credit')
             .reduce((s, p) => s + p.amount, 0);
@@ -455,12 +477,11 @@ export function usePOS() {
         toast.error('Select a customer before recording a Customer Credit balance');
         return undefined;
       }
-      const customer = await localDb.customers.get(customerId);
-      if (customer && customer.creditLimit > 0) {
-        const projected = (customer.currentBalance || 0) + creditPortion;
-        if (projected > customer.creditLimit) {
+      if (customerRecord && customerRecord.creditLimit > 0) {
+        const projected = (customerRecord.currentBalance || 0) + creditPortion;
+        if (projected > customerRecord.creditLimit) {
           toast.error(
-            `Credit limit exceeded for ${customer.name} (Limit: UGX ${customer.creditLimit.toLocaleString()})`
+            `Credit limit exceeded for ${customerRecord.name} (Limit: UGX ${customerRecord.creditLimit.toLocaleString()})`
           );
           return undefined;
         }
@@ -475,7 +496,12 @@ export function usePOS() {
       allBranches.find((b) => b.id === effectiveBranchId)?.name ||
       undefined;
 
-    const sale: Sale = stripUndefined({
+    const loyaltyPointsEarned =
+      saleStatus === 'completed' && loyaltyEnabled && customerRecord
+        ? Math.floor(netTotal / ugxPerPointEarned)
+        : 0;
+
+    let sale: Sale = stripUndefined({
       id: crypto.randomUUID(),
       tenantId: tenant.id,
       ...(effectiveBranchId ? { branchId: effectiveBranchId } : {}),
@@ -497,7 +523,7 @@ export function usePOS() {
       subtotal,
       discount: safeDiscount,
       ...(taxConfig.enabled ? { taxAmount, taxRate: taxConfig.rate } : {}),
-      total,
+      total: netTotal,
       paymentMethod: splitParts.length > 1 ? 'Split Payment' : paymentMethod,
       ...(options?.paymentProvider ? { paymentProvider: options.paymentProvider } : {}),
       ...(options?.paymentReference ? { paymentReference: options.paymentReference } : {}),
@@ -505,9 +531,42 @@ export function usePOS() {
       ...(typeof options?.cashTendered === 'number' ? { cashTendered: options.cashTendered } : {}),
       ...(typeof options?.changeGiven === 'number' ? { changeGiven: options.changeGiven } : {}),
       ...(splitParts.length > 0 ? { splitPayments: splitParts } : {}),
+      ...(loyaltyPointsEarned > 0 ? { loyaltyPointsEarned } : {}),
+      ...(loyaltyPointsRedeemed > 0 ? { loyaltyPointsRedeemed, loyaltyDiscountUgx } : {}),
       status: saleStatus,
       createdAt: new Date().toISOString(),
     });
+
+    if (saleStatus === 'completed' && tenant.preferences?.efrisEnabled) {
+      if (navigator.onLine) {
+        try {
+          const efris = await fiscalizeEfrisReceipt({
+            reference: sale.reference,
+            tin: tenant.tin,
+            businessName: tenant.name,
+            branchName,
+            buyerName: customerRecord?.name,
+            items: sale.items.map((it) => ({
+              productName: it.name,
+              quantity: it.quantity,
+              price: it.price,
+              subtotal: it.total,
+            })),
+            subtotal: sale.subtotal,
+            taxAmount: sale.taxAmount || 0,
+            total: sale.total,
+            paymentMethod: sale.paymentMethod,
+            deviceNo: tenant.preferences.efrisDeviceNo,
+            sandbox: tenant.preferences.efrisSandbox !== false,
+          });
+          sale = stripUndefined({ ...sale, ...efris });
+        } catch {
+          sale = stripUndefined({ ...sale, efrisStatus: 'pending' });
+        }
+      } else {
+        sale = stripUndefined({ ...sale, efrisStatus: 'pending' });
+      }
+    }
 
     try {
       const updatedProducts: Product[] = [];
@@ -515,26 +574,36 @@ export function usePOS() {
         const product = await localDb.products.get(item.id);
         if (product) {
           const stockUpdate = applyBranchStockDelta(product, effectiveBranchId, -item.quantity, branchIds);
+          const fefo =
+            Array.isArray(product.batches) && product.batches.length > 0
+              ? deductFefoBatches(product.batches, item.quantity, effectiveBranchId)
+              : null;
           const updatedProduct = stripUndefined({
             ...product,
             currentStock: stockUpdate.currentStock,
             branchStock: stockUpdate.branchStock,
+            ...(fefo
+              ? {
+                  batches: fefo.updatedBatches,
+                  expiryDate: fefo.nextExpiryDate || product.expiryDate,
+                  batchNumber: fefo.nextBatchNumber || product.batchNumber,
+                }
+              : {}),
           });
           updatedProducts.push(updatedProduct);
         }
       }
 
       let updatedCustomer: Customer | null = null;
-      if (customerId) {
-        const customer = await localDb.customers.get(customerId);
-        if (customer) {
-          const earnedPoints = saleStatus === 'completed' ? Math.floor(total / 10000) : 0;
-          updatedCustomer = stripUndefined({
-            ...customer,
-            loyaltyPoints: (customer.loyaltyPoints || 0) + earnedPoints,
-            currentBalance: (customer.currentBalance || 0) + creditPortion,
-          });
-        }
+      if (customerRecord) {
+        updatedCustomer = stripUndefined({
+          ...customerRecord,
+          loyaltyPoints: Math.max(
+            0,
+            (customerRecord.loyaltyPoints || 0) - loyaltyPointsRedeemed + loyaltyPointsEarned
+          ),
+          currentBalance: (customerRecord.currentBalance || 0) + creditPortion,
+        });
       }
 
       await persistSaleAndSideEffects(sale, 'create', updatedProducts, updatedCustomer);
@@ -549,13 +618,17 @@ export function usePOS() {
         entityType: 'sale',
         entityId: sale.id,
         summary: `${sale.reference} — UGX ${sale.total.toLocaleString()} (${sale.paymentMethod})${
-          options?.cashierName ? ` · Cashier: ${options.cashierName}` : ''
-        }`,
+          sale.efrisFdn ? ` · EFRIS FDN ${sale.efrisFdn}` : ''
+        }${options?.cashierName ? ` · Cashier: ${options.cashierName}` : ''}`,
       });
 
       clearCart();
       toast.success(
-        saleStatus === 'pending' ? 'Order saved as Pending Payment' : 'Sale completed successfully'
+        saleStatus === 'pending'
+          ? 'Order saved as Pending Payment'
+          : sale.efrisFdn
+          ? `Sale completed & fiscalized (FDN ${sale.efrisFdn})`
+          : 'Sale completed successfully'
       );
       return sale;
     } catch (error) {
@@ -587,11 +660,21 @@ export function usePOS() {
       const product = await localDb.products.get(item.productId);
       if (product) {
         const restored = applyBranchStockDelta(product, sale.branchId, item.quantity, branchIds);
+        const restoredBatches = Array.isArray(product.batches)
+          ? restoreFefoBatches(product.batches, item.quantity, sale.branchId)
+          : null;
         updatedProducts.push(
           stripUndefined({
             ...product,
             currentStock: restored.currentStock,
             branchStock: restored.branchStock,
+            ...(restoredBatches
+              ? {
+                  batches: restoredBatches.updatedBatches,
+                  expiryDate: restoredBatches.nextExpiryDate || product.expiryDate,
+                  batchNumber: restoredBatches.nextBatchNumber || product.batchNumber,
+                }
+              : {}),
           })
         );
       }
@@ -608,20 +691,50 @@ export function usePOS() {
                 .filter((p) => p.method === 'Customer Credit')
                 .reduce((s, p) => s + p.amount, 0);
 
+        const earnedToReverse = sale.loyaltyPointsEarned ?? Math.floor(sale.total / 10000);
+        const redeemedToRestore = sale.loyaltyPointsRedeemed || 0;
+
         updatedCustomer = stripUndefined({
           ...customer,
           currentBalance: Math.max(0, (customer.currentBalance || 0) - creditPortion),
-          loyaltyPoints: Math.max(0, (customer.loyaltyPoints || 0) - Math.floor(sale.total / 10000)),
+          loyaltyPoints: Math.max(0, (customer.loyaltyPoints || 0) - earnedToReverse + redeemedToRestore),
         });
       }
     }
 
-    const refundedSale: Sale = stripUndefined({
+    let refundedSale: Sale = stripUndefined({
       ...sale,
       status: 'refunded',
       refundedAt: new Date().toISOString(),
       refundReason: reason.trim() || 'Customer return / voided',
     });
+
+    if (tenant.preferences?.efrisEnabled && navigator.onLine) {
+      try {
+        const cn = await fiscalizeEfrisReceipt({
+          reference: `${sale.reference}-CN`,
+          tin: tenant.tin,
+          businessName: tenant.name,
+          branchName: sale.branchName,
+          items: sale.items.map((it) => ({
+            productName: it.name,
+            quantity: it.quantity,
+            price: it.price,
+            subtotal: it.total,
+          })),
+          subtotal: sale.subtotal,
+          taxAmount: sale.taxAmount || 0,
+          total: sale.total,
+          paymentMethod: sale.paymentMethod,
+          deviceNo: tenant.preferences.efrisDeviceNo,
+          sandbox: tenant.preferences.efrisSandbox !== false,
+          isCreditNote: true,
+        });
+        refundedSale = stripUndefined({ ...refundedSale, ...cn });
+      } catch {
+        // Non-blocking fallback
+      }
+    }
 
     await persistSaleAndSideEffects(refundedSale, 'update', updatedProducts, updatedCustomer);
 
@@ -639,6 +752,50 @@ export function usePOS() {
 
     toast.success(`${sale.reference} refunded & stock restored`);
     return true;
+  };
+
+  const retryEfrisFiscalization = async (saleId: string): Promise<Sale | undefined> => {
+    if (!user || !tenant) return undefined;
+    if (!tenant.preferences?.efrisEnabled) {
+      toast.error('Enable URA EFRIS in Settings first');
+      return undefined;
+    }
+    if (!navigator.onLine) {
+      toast.error('Connect to the internet to fiscalize receipt');
+      return undefined;
+    }
+    const sale = await localDb.sales.get(saleId);
+    if (!sale) return undefined;
+    const customer = sale.customerId ? await localDb.customers.get(sale.customerId) : undefined;
+    try {
+      const efris = await fiscalizeEfrisReceipt({
+        reference: sale.status === 'refunded' ? `${sale.reference}-CN` : sale.reference,
+        tin: tenant.tin,
+        businessName: tenant.name,
+        branchName: sale.branchName,
+        buyerName: customer?.name,
+        items: sale.items.map((it) => ({
+          productName: it.name,
+          quantity: it.quantity,
+          price: it.price,
+          subtotal: it.total,
+        })),
+        subtotal: sale.subtotal,
+        taxAmount: sale.taxAmount || 0,
+        total: sale.total,
+        paymentMethod: sale.paymentMethod,
+        deviceNo: tenant.preferences.efrisDeviceNo,
+        sandbox: tenant.preferences.efrisSandbox !== false,
+        isCreditNote: sale.status === 'refunded',
+      });
+      const updated = stripUndefined({ ...sale, ...efris });
+      await persistSaleAndSideEffects(updated, 'update', [], null);
+      toast.success(`Fiscalized ${sale.reference} · FDN ${efris.efrisFdn}`);
+      return updated;
+    } catch (err: any) {
+      toast.error(err?.message || 'EFRIS fiscalization failed');
+      return undefined;
+    }
   };
 
   const settlePendingSale = async (
@@ -1165,6 +1322,7 @@ export function usePOS() {
     selectedCustomerType,
     processSale,
     refundSale,
+    retryEfrisFiscalization,
     settlePendingSale,
     bulkImportSales,
     bulkImportRefunds,

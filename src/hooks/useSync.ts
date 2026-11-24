@@ -9,6 +9,8 @@ import { SyncTable, Tenant } from '../types';
 import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { getUserAllowedSections } from '../utils/rbac';
+import { setSyncedDailyAiUsage } from '../utils/planLimits';
+import { fetchServerAiUsage } from '../services/aiService';
 import toast from 'react-hot-toast';
 
 let queueFlushInFlight = false;
@@ -56,6 +58,12 @@ export async function flushSyncQueue(tenantId: string): Promise<void> {
               await localDb.syncQueue.delete(record.id);
             }
           } catch (error) {
+            const rawMessage =
+              error instanceof Error
+                ? error.message
+                : typeof error === 'object' && error !== null && 'message' in error
+                ? String((error as { message: unknown }).message)
+                : 'Firestore write rejected';
             try {
               handleFirestoreError(
                 error,
@@ -66,7 +74,12 @@ export async function flushSyncQueue(tenantId: string): Promise<void> {
               console.error(structuredErr);
             }
             if (record.id !== undefined) {
-              await localDb.syncQueue.update(record.id, { status: 'error' });
+              await localDb.syncQueue.update(record.id, {
+                status: 'error',
+                errorMessage: rawMessage.slice(0, 280),
+                retryCount: (record.retryCount || 0) + 1,
+                lastAttemptAt: Date.now(),
+              });
             }
             setStatus('error');
           }
@@ -86,8 +99,33 @@ export async function flushSyncQueue(tenantId: string): Promise<void> {
   }
 }
 
+export async function retrySyncItem(recordId: number, tenantId: string): Promise<void> {
+  await localDb.syncQueue.update(recordId, {
+    status: 'pending',
+    errorMessage: undefined,
+  });
+  if (navigator.onLine) {
+    await flushSyncQueue(tenantId);
+  }
+}
+
+export async function retryAllFailedSyncItems(tenantId: string): Promise<void> {
+  await localDb.syncQueue
+    .where('status')
+    .equals('error')
+    .filter((r) => !r.tenantId || r.tenantId === tenantId)
+    .modify({ status: 'pending', errorMessage: undefined });
+  if (navigator.onLine) {
+    await flushSyncQueue(tenantId);
+  }
+}
+
+export async function discardSyncItem(recordId: number): Promise<void> {
+  await localDb.syncQueue.delete(recordId);
+}
+
 export function useSync() {
-  const { isOnline, setOnline, setPendingCount, setStatus, setLastSyncedAt } = useSyncStore();
+  const { isOnline, setOnline, setPendingCount, setFailedCount, setStatus, setLastSyncedAt } = useSyncStore();
   const { tenant, user, setTenant } = useAuthStore();
 
   const sectionsKey = useMemo(() => {
@@ -359,37 +397,60 @@ export function useSync() {
       }
     );
 
+    const todayKey = new Date().toISOString().split('T')[0];
+    const unsubAiUsage = onSnapshot(
+      doc(db, 'tenants', tenantId, 'aiUsage', todayKey),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as { count?: number; dateKey?: string };
+          if (typeof data.count === 'number') {
+            setSyncedDailyAiUsage(tenantId, data.count, data.dateKey || todayKey);
+          }
+        }
+      },
+      () => {
+        // Non-fatal if aiUsage doc does not exist yet
+      }
+    );
+
+    fetchServerAiUsage()
+      .then((res) => {
+        if (res?.tenantId === tenantId && typeof res.count === 'number') {
+          setSyncedDailyAiUsage(tenantId, res.count, res.dateKey);
+        }
+      })
+      .catch(() => {});
+
     return () => {
       unsubscribers.forEach((unsub) => unsub());
       unsubMembers();
       unsubTenant();
+      unsubAiUsage();
     };
   }, [isOnline, tenant?.id, user?.role, sectionsKey, activeCollections, setTenant, setStatus, setLastSyncedAt]);
 
-  // Live pending sync queue counter scoped to tenant
+  // Live pending & failed sync queue counters scoped to tenant
   useEffect(() => {
     const subscription = liveQuery(() =>
       localDb.syncQueue
         .where('status')
         .anyOf(['pending', 'error'])
         .filter((r) => !tenant?.id || !r.tenantId || r.tenantId === tenant.id)
-        .count()
+        .toArray()
     ).subscribe({
-      next: (count) => setPendingCount(count),
+      next: (rows) => {
+        setPendingCount(rows.length);
+        setFailedCount(rows.filter((r) => r.status === 'error').length);
+      },
       error: (err) => console.error('Sync queue liveQuery error:', err),
     });
 
     return () => subscription.unsubscribe();
-  }, [setPendingCount, tenant?.id]);
+  }, [setPendingCount, setFailedCount, tenant?.id]);
 
   const syncData = useCallback(async () => {
     if (!isOnline || !tenant) return;
-    await localDb.syncQueue
-      .where('status')
-      .equals('error')
-      .filter((r) => !r.tenantId || r.tenantId === tenant.id)
-      .modify({ status: 'pending' });
-    await flushSyncQueue(tenant.id);
+    await retryAllFailedSyncItems(tenant.id);
     const remaining = await localDb.syncQueue
       .where('status')
       .anyOf(['pending', 'error'])

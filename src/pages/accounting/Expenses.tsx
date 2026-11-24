@@ -475,7 +475,7 @@ export default function Expenses() {
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div className="flex items-center gap-3">
                 <ArrowDownCircle size={24} />

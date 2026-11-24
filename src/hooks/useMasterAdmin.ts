@@ -297,13 +297,13 @@ export function useMasterAdmin() {
       ? 'active'
       : trialStillValid
       ? 'trial'
-      : 'suspended';
+      : 'locked';
 
     try {
       await updateDoc(doc(db, 'tenants', target.id), {
         status: fallbackStatus,
-        locked: fallbackStatus === 'suspended',
-        ...(fallbackStatus === 'suspended' ? { disabledReason: cleanReason } : {}),
+        locked: fallbackStatus === 'locked',
+        ...(fallbackStatus === 'locked' ? { disabledReason: cleanReason } : {}),
         ...clearPendingFields(),
       });
 
@@ -735,14 +735,19 @@ export function useMasterAdmin() {
           nowMs - new Date(org.lastAutoReminderAt).getTime() < 24 * 60 * 60 * 1000;
 
         // 1. Expired unpaid workspace -> auto lock (if enabled) & send expired notice
-        if (autoLock && state.isExpired && !state.isPendingApproval && (!org.locked || org.status !== 'suspended')) {
+        if (
+          autoLock &&
+          state.isExpired &&
+          !state.isPendingApproval &&
+          (!org.locked || (org.status !== 'locked' && org.status !== 'suspended'))
+        ) {
           const msg = `Your ${quota.name} subscription (${formatUGX(
             fee
           )}/month) expired on ${expiryStr} and has been locked. Renew via MTN MoMo or Airtel Money in Billing to unlock your workspace.`;
 
           await updateDoc(doc(db, 'tenants', org.id), {
             locked: true,
-            status: 'suspended',
+            status: 'locked',
             disabledReason: 'Monthly subscription expired — renew in Billing to restore access.',
             lastReminderAt: nowIso,
             lastReminderMessage: msg,

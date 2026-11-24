@@ -39,6 +39,7 @@ import {
 } from '../../utils/platformPlans';
 import { usePlatformBillingConfig } from '../../utils/platformBilling';
 import { formatUGX, formatDate } from '../../utils/format';
+import { formatRemainingCountdown } from '../../utils/trialUtils';
 import { BillingHistorySkeleton } from '../../components/shared/Skeletons';
 import { BANKS } from '../../constants';
 import { parseUgandaPhone } from '../../utils/ugandaPayments';
@@ -441,11 +442,9 @@ export default function Billing() {
           ) : trialState.isTrial && !trialState.isSoftLocked ? (
             <div className="flex items-center gap-2 px-4 py-2 bg-accent/10 text-accent rounded-lg border border-accent/20 text-sm font-semibold">
               <CheckCircle2 size={18} />
-              <span>
-                Trial Active:{' '}
-                {trialState.daysRemaining > 0
-                  ? `${trialState.daysRemaining} day${trialState.daysRemaining === 1 ? '' : 's'} remaining`
-                  : `${trialState.hoursRemaining} hours remaining`}
+              <span className="font-mono tabular-nums">
+                Trial Day {trialState.currentTrialDay}/{trialState.totalTrialDays} ·{' '}
+                {formatRemainingCountdown(trialState)}
               </span>
             </div>
           ) : (
@@ -569,7 +568,7 @@ export default function Billing() {
       </div>
 
       {platformPlansConfig.upgradeHeadline && (
-        <div className="p-3.5 rounded-xl border border-border bg-white text-xs text-text-secondary flex flex-wrap items-center justify-between gap-2">
+        <div className="p-3.5 rounded-xl border border-border bg-surface text-xs text-text-secondary flex flex-wrap items-center justify-between gap-2">
           <span>{platformPlansConfig.upgradeHeadline}</span>
           <span className="font-mono text-[11px] font-semibold text-primary">
             Multi-month savings: 3m ({platformPlansConfig.multiMonthDiscounts.m3}% off) · 6m (
@@ -711,7 +710,7 @@ export default function Billing() {
                   )}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="px-2.5 py-1.5 bg-white border border-border rounded text-xs font-bold text-primary shrink-0">
+                    <div className="px-2.5 py-1.5 bg-surface border border-border rounded text-xs font-bold text-primary shrink-0">
                       {METHOD_BADGE[method.type]}
                     </div>
                     <div className="min-w-0">
@@ -830,7 +829,7 @@ export default function Billing() {
       {/* Plan Activation Checkout Modal (Uganda Providers) */}
       {checkoutPlan && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[92dvh]">
+          <div className="bg-surface border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[92dvh]">
             <div className="p-5 sm:p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white">Uganda Subscription Checkout</h3>
@@ -871,7 +870,7 @@ export default function Billing() {
                           'p-2 rounded-lg border text-center transition-all',
                           checkoutMonths === m
                             ? 'border-accent bg-accent/10 text-primary font-bold'
-                            : 'border-border bg-white text-text-secondary hover:bg-surface-alt/50'
+                            : 'border-border bg-surface text-text-secondary hover:bg-surface-alt/50'
                         )}
                       >
                         <span className="block text-xs">{m} Mo{m > 1 ? 's' : ''}</span>
@@ -923,7 +922,7 @@ export default function Billing() {
                           'p-2.5 rounded-xl border text-left transition-all flex flex-col gap-1',
                           active
                             ? 'border-accent bg-accent/5 ring-2 ring-accent/20'
-                            : 'border-border bg-white hover:bg-surface-alt/60'
+                            : 'border-border bg-surface hover:bg-surface-alt/60'
                         )}
                       >
                         <div className="flex items-center justify-between">
@@ -993,7 +992,7 @@ export default function Billing() {
                         </button>
                       </div>
                     ) : activePlatformChannel.id !== 'flutterwave' ? (
-                      <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                      <p className="text-primary bg-accent-alt/10 border border-accent-alt/30 rounded-lg px-2.5 py-1.5">
                         Direct merchant code / account number has not been published yet. Use the Flutterwave push prompt or contact Billing Support below.
                       </p>
                     ) : null}
@@ -1026,7 +1025,7 @@ export default function Billing() {
                     </label>
                     <input
                       type="tel"
-                      className="input w-full bg-white font-mono"
+                      className="input w-full font-mono"
                       placeholder={
                         activePlatformChannel.id === 'mtn_momo' ? '0772 123 456' : '0752 123 456'
                       }
@@ -1076,7 +1075,7 @@ export default function Billing() {
                     )}
                   </div>
                   {checkoutFeedback && (
-                    <div className="p-2.5 rounded-lg bg-white border border-border text-xs text-text-secondary">
+                    <div className="p-2.5 rounded-lg bg-surface border border-border text-xs text-text-secondary">
                       {checkoutFeedback}
                     </div>
                   )}
@@ -1174,7 +1173,7 @@ export default function Billing() {
 
       {isMethodModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 sm:p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div className="flex items-center gap-3">
                 <CreditCard size={22} />

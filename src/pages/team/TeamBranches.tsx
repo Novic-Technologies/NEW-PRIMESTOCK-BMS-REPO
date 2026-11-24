@@ -879,7 +879,7 @@ export default function TeamBranches() {
       {/* Add / Edit Branch Modal */}
       {isBranchModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white">
                 {editingBranchId ? 'Edit Business Branch' : 'Add Business Branch'}
@@ -952,7 +952,7 @@ export default function TeamBranches() {
       {/* Create Staff Account / Send Invite Modal */}
       {isStaffModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[92dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[92dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white">Add Business Staff Member</h3>
               <button
@@ -965,7 +965,7 @@ export default function TeamBranches() {
             </div>
 
             <div className="px-6 pt-4 pb-2 border-b border-border bg-surface-alt/50 shrink-0">
-              <div className="grid grid-cols-2 gap-1 p-1 bg-white border border-border rounded-lg">
+              <div className="grid grid-cols-2 gap-1 p-1 bg-surface border border-border rounded-lg">
                 <button
                   type="button"
                   onClick={() => {
@@ -1152,7 +1152,7 @@ export default function TeamBranches() {
                             'flex items-center gap-2 px-2.5 py-2 rounded-lg border text-xs cursor-pointer select-none transition-colors',
                             checked
                               ? 'bg-accent/10 border-accent/40 text-primary font-semibold'
-                              : 'bg-white border-border text-text-secondary hover:bg-surface-alt'
+                              : 'bg-surface border-border text-text-secondary hover:bg-surface-alt'
                           )}
                         >
                           <input
@@ -1203,7 +1203,7 @@ export default function TeamBranches() {
       {/* Customize Member Section Access Modal */}
       {editingAccessMember && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white">
@@ -1237,7 +1237,7 @@ export default function TeamBranches() {
                         'flex items-center gap-2 px-2.5 py-2 rounded-lg border text-xs cursor-pointer select-none transition-colors',
                         checked
                           ? 'bg-accent/10 border-accent/40 text-primary font-semibold'
-                          : 'bg-white border-border text-text-secondary hover:bg-surface-alt'
+                          : 'bg-surface border-border text-text-secondary hover:bg-surface-alt'
                       )}
                     >
                       <input
@@ -1286,7 +1286,7 @@ export default function TeamBranches() {
       {/* Set / Update 4-Digit POS PIN Modal */}
       {editingPinMember && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white">4-Digit POS PIN</h3>
@@ -1357,7 +1357,7 @@ export default function TeamBranches() {
       {/* Confirm Permanent Removal of Inactive Staff */}
       {removeTarget && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-danger/25 flex flex-col max-h-[90dvh]">
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-danger/25 flex flex-col max-h-[90dvh]">
             <div className="p-5 bg-danger text-white flex items-center justify-between shrink-0">
               <h3 className="text-lg font-bold text-white">Remove Inactive Staff Member</h3>
               <button

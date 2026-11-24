@@ -16,6 +16,8 @@ import {
   X,
   Lock,
   Camera,
+  CheckCircle2,
+  Ban,
 } from 'lucide-react';
 import { useInventory } from '../../hooks/useInventory';
 import { useStockOperations } from '../../hooks/useStockOperations';
@@ -47,7 +49,14 @@ export default function Products() {
   const { user, tenant } = useAuthStore();
   const { products, isLoading, bulkImportProducts, deleteProduct } = useInventory();
   const { branches, activeBranchId } = useBranches();
-  const { transfers, adjustments, recordAdjustment, transferStock } = useStockOperations();
+  const {
+    transfers,
+    adjustments,
+    recordAdjustment,
+    transferStock,
+    confirmTransferReceipt,
+    cancelInTransitTransfer,
+  } = useStockOperations();
 
   const canManage = canManageInventoryData(user);
   const isAdmin = user?.role === 'admin';
@@ -494,6 +503,11 @@ export default function Products() {
                         <p className="text-sm font-mono text-text-secondary">{product.sku || '-'}</p>
                         <p className="text-xs text-text-muted">
                           {product.barcode || '-'}
+                          {product.batches && product.batches.length > 1 && (
+                            <span className="ml-2 px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[10px] font-bold">
+                              {product.batches.length} lots (FEFO)
+                            </span>
+                          )}
                           {product.expiryDate && (
                             <span className={cn('ml-2 font-semibold', isExpiring && 'text-danger')}>
                               · Exp: {product.expiryDate}
@@ -709,25 +723,65 @@ export default function Products() {
         </div>
       </div>
 
-      {/* Recent Inter-Branch Transfers Log */}
+      {/* Recent Inter-Branch Transfers Log (Two-Step In-Transit Workflow) */}
       {transfers.length > 0 && (
         <div className="card p-0 overflow-hidden">
-          <div className="p-4 border-b border-border bg-surface-alt/40 flex items-center gap-2">
-            <ArrowRightLeft size={16} className="text-primary" />
-            <h2 className="font-bold text-primary text-sm">Recent Inter-Branch Stock Transfers</h2>
+          <div className="p-4 border-b border-border bg-surface-alt/40 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <ArrowRightLeft size={16} className="text-primary" />
+              <h2 className="font-bold text-primary text-sm">Inter-Branch Stock Transfers</h2>
+            </div>
+            <span className="text-xs text-text-muted font-mono">
+              {transfers.filter((t) => t.status === 'in_transit').length} in transit
+            </span>
           </div>
           <div className="divide-y divide-border text-sm">
-            {transfers.slice(0, 5).map((tr) => (
-              <div key={tr.id} className="px-6 py-3 flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <span className="font-bold text-primary">{tr.productName}</span>
-                  <span className="text-text-muted text-xs ml-2">
-                    {tr.fromBranchName} → {tr.toBranchName}
-                  </span>
+            {transfers.slice(0, 8).map((tr) => (
+              <div key={tr.id} className="px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-bold text-primary">{tr.productName}</span>
+                    <span
+                      className={cn(
+                        'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider',
+                        tr.status === 'completed'
+                          ? 'bg-accent/10 text-accent'
+                          : tr.status === 'in_transit'
+                          ? 'bg-accent-alt/15 text-accent-alt'
+                          : 'bg-danger/10 text-danger'
+                      )}
+                    >
+                      {tr.status === 'in_transit' ? 'In Transit' : tr.status}
+                    </span>
+                  </div>
+                  <p className="text-text-muted text-xs mt-0.5">
+                    {tr.fromBranchName} → {tr.toBranchName} ·{' '}
+                    <span className="font-mono tabular-nums font-bold text-primary">
+                      {tr.quantity} units
+                    </span>
+                    {tr.receivedByName ? ` · Received by ${tr.receivedByName}` : ''}
+                  </p>
                 </div>
-                <span className="font-mono tabular-nums font-bold text-accent">
-                  {tr.quantity} units
-                </span>
+                {tr.status === 'in_transit' && canManage && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void confirmTransferReceipt(tr.id)}
+                      className="btn btn-primary text-xs py-1.5 px-3 min-h-[32px] gap-1 whitespace-nowrap"
+                    >
+                      <CheckCircle2 size={13} />
+                      Confirm Receipt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void cancelInTransitTransfer(tr.id)}
+                      className="btn btn-secondary text-xs py-1.5 px-2.5 min-h-[32px] gap-1 text-danger whitespace-nowrap"
+                    >
+                      <Ban size={13} />
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -737,7 +791,7 @@ export default function Products() {
       {/* Logged Stock Adjustment Modal */}
       {adjustTarget && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh] border border-border">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white truncate pr-2">Adjust Stock · {adjustTarget.name}</h3>
               <button
@@ -813,7 +867,7 @@ export default function Products() {
       {/* Inter-Branch Stock Transfer Modal */}
       {transferTarget && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh] border border-border">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white truncate pr-2">Transfer Stock · {transferTarget.name}</h3>
               <button

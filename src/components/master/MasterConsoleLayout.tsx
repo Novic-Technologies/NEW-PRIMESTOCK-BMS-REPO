@@ -24,6 +24,7 @@ import { formatUGX } from '../../utils/format';
 import { SYSTEM_LOGO_URL } from '../../utils/branding';
 import { prefetchRoute } from '../../utils/routePrefetch';
 import { PWAInstallButton } from '../shared/PWAInstallButton';
+import { ThemeToggleButton } from '../shared/ThemeToggleButton';
 
 const MASTER_NAV = [
   { label: 'Control Overview', path: '/master', icon: LayoutDashboard, end: true },
@@ -77,7 +78,7 @@ export function MasterConsoleLayout() {
   }, [organizations, plansConfig]);
 
   return (
-    <div className="min-h-screen flex bg-[#EDF1F6] text-[#0F1E33]">
+    <div className="min-h-screen flex bg-canvas text-text-primary">
       {mobileOpen && (
         <div
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
@@ -221,7 +222,7 @@ export function MasterConsoleLayout() {
 
       {/* Main Governance Viewport */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="bg-[#FBFDFF]/95 backdrop-blur-sm border-b border-[#D5DEE9] px-4 md:px-8 h-16 flex items-center justify-between gap-4 sticky top-0 z-30">
+        <header className="bg-surface/95 backdrop-blur-sm border-b border-border px-4 md:px-8 h-16 flex items-center justify-between gap-4 sticky top-0 z-30">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -229,46 +230,47 @@ export function MasterConsoleLayout() {
               title={isMinimized ? 'Expand sidebar' : 'Minimize sidebar'}
               aria-label={isMinimized ? 'Expand sidebar' : 'Minimize sidebar'}
               aria-expanded={!isMinimized}
-              className="hidden lg:inline-flex p-2 rounded-lg border border-[#D5DEE9] text-[#0F1E33] hover:bg-[#EDF1F6]"
+              className="hidden lg:inline-flex p-2 rounded-lg border border-border text-text-primary hover:bg-surface-alt"
             >
               {isMinimized ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
             </button>
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
-              className="lg:hidden p-2 rounded-lg border border-[#D5DEE9] text-[#0F1E33] hover:bg-[#EDF1F6]"
+              className="lg:hidden p-2 rounded-lg border border-border text-text-primary hover:bg-surface-alt"
               aria-label="Open menu"
             >
               <Menu size={18} />
             </button>
             <div className="min-w-0">
-              <p className="text-xs font-bold uppercase tracking-wider text-[#0F766E]">
+              <p className="text-xs font-bold uppercase tracking-wider text-accent">
                 Master Platform Control
               </p>
-              <p className="text-xs text-[#64748B] truncate hidden sm:block">
+              <p className="text-xs text-text-muted truncate hidden sm:block">
                 System-wide business governance · Strictly separated from merchant storefronts
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 md:gap-4 text-xs shrink-0">
+          <div className="flex items-center gap-2.5 md:gap-4 text-xs shrink-0">
+            <ThemeToggleButton compact />
             <div className="hidden md:block">
               <PWAInstallButton compact />
             </div>
-            <div className="hidden md:flex items-center gap-4 text-[#475569] font-medium">
+            <div className="hidden md:flex items-center gap-4 text-text-secondary font-medium">
               <span>
                 Workspaces:{' '}
-                <strong className="font-mono tabular-nums text-[#0F1E33]">{summary.total}</strong>
+                <strong className="font-mono tabular-nums text-text-primary">{summary.total}</strong>
               </span>
               <span>·</span>
               <span>
                 Active:{' '}
-                <strong className="font-mono tabular-nums text-[#0F766E]">{summary.activeCount}</strong>
+                <strong className="font-mono tabular-nums text-accent">{summary.activeCount}</strong>
               </span>
               <span>·</span>
               <span>
                 Platform MRR:{' '}
-                <strong className="font-mono tabular-nums text-[#0F1E33]">
+                <strong className="font-mono tabular-nums text-text-primary">
                   {formatUGX(summary.mrrUgx)}
                 </strong>
               </span>
@@ -276,7 +278,7 @@ export function MasterConsoleLayout() {
             {summary.pendingCount > 0 && (
               <NavLink
                 to="/master/approvals"
-                className="px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 font-bold text-xs whitespace-nowrap hover:bg-amber-100"
+                className="px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 font-bold text-xs whitespace-nowrap hover:bg-amber-500/25"
               >
                 {summary.pendingCount} Pending Approval{summary.pendingCount === 1 ? '' : 's'}
               </NavLink>

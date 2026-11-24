@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, Package, Barcode, Tag, DollarSign, Layers, Camera, Wand2 } from 'lucide-react';
+import { X, Package, Barcode, Tag, DollarSign, Layers, Camera, Wand2, Plus, Trash2 } from 'lucide-react';
 import { useInventory } from '../../hooks/useInventory';
 import { EnrichedProductSuggestion, runAiAssistantTool } from '../../services/aiService';
 import { BarcodeScannerModal } from '../shared/BarcodeScannerModal';
-import { Product } from '../../types';
+import { Product, ProductBatch } from '../../types';
 import toast from 'react-hot-toast';
 
 interface NewProductModalProps {
@@ -32,6 +32,7 @@ const DEFAULT_FORM = {
 export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductModalProps) {
   const { addProduct, updateProduct } = useInventory();
   const [formData, setFormData] = useState(DEFAULT_FORM);
+  const [batches, setBatches] = useState<ProductBatch[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
@@ -54,8 +55,10 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
         expiryDate: editingProduct.expiryDate || '',
         status: editingProduct.status || 'active',
       });
+      setBatches(Array.isArray(editingProduct.batches) ? editingProduct.batches : []);
     } else {
       setFormData(DEFAULT_FORM);
+      setBatches([]);
     }
   }, [editingProduct, isOpen]);
 
@@ -106,6 +109,8 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
     }
 
     setIsSaving(true);
+    const activeBatches = batches.filter((b) => (Number(b.quantity) || 0) > 0);
+    const totalBatchStock = activeBatches.reduce((sum, b) => sum + (Number(b.quantity) || 0), 0);
     const payload = {
       ...formData,
       name: formData.name.trim(),
@@ -113,8 +118,10 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
       barcode: formData.barcode.trim() || undefined,
       wholesalePrice: formData.wholesalePrice > 0 ? formData.wholesalePrice : undefined,
       vipPrice: formData.vipPrice > 0 ? formData.vipPrice : undefined,
+      currentStock: activeBatches.length > 0 ? totalBatchStock : formData.currentStock,
       batchNumber: formData.batchNumber.trim() || undefined,
       expiryDate: formData.expiryDate.trim() || undefined,
+      batches: activeBatches.length > 0 ? activeBatches : undefined,
     };
 
     try {
@@ -126,6 +133,7 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
         if (res) {
           onClose();
           setFormData(DEFAULT_FORM);
+          setBatches([]);
         }
       }
     } finally {
@@ -136,7 +144,7 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
   return (
     <>
       <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden max-h-[90dvh] flex flex-col">
+        <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden max-h-[90dvh] flex flex-col border border-border">
           <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
             <div className="flex items-center gap-3">
               <Package size={24} />
@@ -359,6 +367,96 @@ export function NewProductModal({ isOpen, onClose, editingProduct }: NewProductM
                   value={formData.expiryDate}
                   onChange={(e) => setFormData({ ...formData, expiryDate: e.target.value })}
                 />
+              </div>
+
+              {/* Multi-Batch FEFO Lot Manager */}
+              <div className="col-span-full p-4 rounded-xl border border-border bg-surface-alt/40 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-bold text-primary uppercase tracking-wider">
+                      Batch Lots (FEFO — First-Expired, First-Out)
+                    </p>
+                    <p className="text-[11px] text-text-muted">
+                      Optional: track multiple expiry lots per SKU. POS deducts the earliest expiring lot first.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setBatches((prev) => [
+                        ...prev,
+                        {
+                          id: crypto.randomUUID(),
+                          batchNumber: `LOT-${prev.length + 1}`,
+                          expiryDate: formData.expiryDate || '',
+                          quantity: prev.length === 0 ? Math.max(0, formData.currentStock) : 0,
+                        },
+                      ])
+                    }
+                    className="btn btn-secondary text-xs py-1.5 px-3 min-h-[34px] gap-1 whitespace-nowrap"
+                  >
+                    <Plus size={13} />
+                    Add Lot
+                  </button>
+                </div>
+
+                {batches.length > 0 && (
+                  <div className="space-y-2">
+                    {batches.map((lot, idx) => (
+                      <div
+                        key={lot.id}
+                        className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-surface p-2 rounded-lg border border-border"
+                      >
+                        <input
+                          type="text"
+                          placeholder="Batch #"
+                          className="input-sm sm:col-span-4 font-mono text-xs"
+                          value={lot.batchNumber}
+                          onChange={(e) =>
+                            setBatches((prev) =>
+                              prev.map((b, i) => (i === idx ? { ...b, batchNumber: e.target.value } : b))
+                            )
+                          }
+                        />
+                        <input
+                          type="date"
+                          className="input-sm sm:col-span-4 text-xs"
+                          value={lot.expiryDate || ''}
+                          onChange={(e) =>
+                            setBatches((prev) =>
+                              prev.map((b, i) => (i === idx ? { ...b, expiryDate: e.target.value } : b))
+                            )
+                          }
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="Qty"
+                          className="input-sm sm:col-span-3 font-mono tabular-nums text-xs"
+                          value={lot.quantity}
+                          onChange={(e) =>
+                            setBatches((prev) =>
+                              prev.map((b, i) =>
+                                i === idx ? { ...b, quantity: Math.max(0, Number(e.target.value) || 0) } : b
+                              )
+                            )
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setBatches((prev) => prev.filter((_, i) => i !== idx))}
+                          aria-label={`Remove lot ${lot.batchNumber}`}
+                          className="p-1.5 text-text-muted hover:text-danger sm:col-span-1 justify-self-end"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    <p className="text-[11px] font-mono text-text-secondary">
+                      Combined Lot Stock: <strong>{batches.reduce((s, b) => s + (Number(b.quantity) || 0), 0)} {formData.unit}</strong>
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 

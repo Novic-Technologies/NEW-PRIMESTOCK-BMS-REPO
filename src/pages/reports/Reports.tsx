@@ -38,7 +38,7 @@ import { PageContentSkeleton } from '../../components/shared/Skeletons';
 import { cn } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
-const COLORS = ['#0B1F3A', '#0F766E', '#B45309', '#DC2626', '#2563EB', '#475569'];
+const COLORS = ['#2563EB', '#0F766E', '#D97706', '#DC2626', '#0891B2', '#64748B'];
 
 type DateRangeKey = '7d' | '30d' | '180d' | 'all';
 type ChartSeriesFilter = 'both' | 'revenue' | 'expenses';
@@ -492,7 +492,7 @@ export default function Reports() {
             className={cn(
               'px-4 py-2 text-xs sm:text-sm font-semibold rounded-md transition-colors whitespace-nowrap',
               reportTab === tab.key
-                ? 'bg-white text-primary shadow-sm'
+                ? 'bg-surface text-primary shadow-sm'
                 : 'text-text-secondary hover:text-primary'
             )}
           >
@@ -568,19 +568,19 @@ export default function Reports() {
                         <stop offset="95%" stopColor="#DC2626" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#D5DEE9" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border)" />
                     <XAxis
                       dataKey="name"
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: '#64748B', fontSize: 11, fontWeight: 600 }}
+                      tick={{ fill: 'var(--color-text-muted)', fontSize: 11, fontWeight: 600 }}
                       dy={10}
                     />
                     <YAxis
                       width={52}
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: '#64748B', fontSize: 11, fontWeight: 600 }}
+                      tick={{ fill: 'var(--color-text-muted)', fontSize: 11, fontWeight: 600 }}
                       tickFormatter={(val) =>
                         val >= 1000000 ? `${(val / 1000000).toFixed(1)}M` : `${Math.round(val / 1000)}k`
                       }
@@ -589,10 +589,14 @@ export default function Reports() {
                       formatter={(value: any) => formatUGX(Number(value || 0))}
                       contentStyle={{
                         borderRadius: '12px',
-                        border: '1px solid #D5DEE9',
-                        boxShadow: '0 10px 25px -5px rgb(11 31 58 / 0.1)',
+                        backgroundColor: 'var(--color-surface)',
+                        border: '1px solid var(--color-border)',
+                        color: 'var(--color-text-primary)',
+                        boxShadow: 'var(--shadow-soft)',
                         padding: '10px 12px',
                       }}
+                      itemStyle={{ color: 'var(--color-text-primary)' }}
+                      labelStyle={{ color: 'var(--color-text-secondary)' }}
                     />
                     {(seriesFilter === 'both' || seriesFilter === 'revenue') && (
                       <Area
@@ -658,9 +662,13 @@ export default function Reports() {
                         <Tooltip
                           contentStyle={{
                             borderRadius: '12px',
-                            border: '1px solid #E2E8F0',
-                            boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)',
+                            backgroundColor: 'var(--color-surface)',
+                            border: '1px solid var(--color-border)',
+                            color: 'var(--color-text-primary)',
+                            boxShadow: 'var(--shadow-soft)',
                           }}
+                          itemStyle={{ color: 'var(--color-text-primary)' }}
+                          labelStyle={{ color: 'var(--color-text-secondary)' }}
                         />
                       </PieChart>
                     </ResponsiveContainer>

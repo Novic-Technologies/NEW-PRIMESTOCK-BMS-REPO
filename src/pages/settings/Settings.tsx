@@ -19,17 +19,23 @@ import {
   AlertTriangle,
   X,
   Download,
+  Sun,
+  Moon,
+  Monitor,
+  Gift,
+  FileCheck2,
 } from 'lucide-react';
 import { collection, deleteField, doc, getDocs, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebase';
 import { localDb } from '../../services/db';
 import { useAuthStore } from '../../store/authStore';
+import { useThemeStore } from '../../store/themeStore';
 import { useAuth } from '../../hooks/useAuth';
 import { useTrialGuard } from '../../hooks/useTrialGuard';
 import { logWorkspaceAudit } from '../../hooks/useAuditLog';
-import { Tenant, TenantBranding, TenantPreferences } from '../../types';
+import { Tenant, TenantBranding, TenantPreferences, ThemePreference } from '../../types';
 import { stripUndefined } from '../../utils/firestoreUtils';
-import { printViaThermalSerial } from '../../utils/thermalPrint';
+import { printReceiptDispatch } from '../../utils/thermalPrint';
 import { canAccessFeature } from '../../utils/planLimits';
 import { handleFirestoreError, OperationType } from '../../utils/errorHandlers';
 import {
@@ -119,6 +125,7 @@ const ToggleSwitch = ({
 
 export default function Settings() {
   const { tenant, user, setTenant, setUser } = useAuthStore();
+  const { preference: themePreference, setPreference: setThemePreference } = useThemeStore();
   const {
     resendVerificationEmail,
     refreshAuthSession,
@@ -166,11 +173,19 @@ export default function Settings() {
     airtelMerchantCode: '',
     whatsappReceipts: true,
     thermalPrinterName: '',
+    thermalPrintMode: 'browser',
+    cashDrawerKickEnabled: false,
     staffPinsEnabled: false,
     receiptFooter: '',
     taxEnabled: false,
     taxRate: 18,
     taxInclusive: true,
+    efrisEnabled: false,
+    efrisDeviceNo: '',
+    efrisSandbox: true,
+    loyaltyEnabled: true,
+    loyaltyPointsPerUgx: 10000,
+    loyaltyUgxPerPoint: 100,
   });
 
   const [showMtnConfig, setShowMtnConfig] = useState(false);
@@ -210,11 +225,19 @@ export default function Settings() {
       airtelMerchantCode: tenant.preferences?.airtelMerchantCode || '',
       whatsappReceipts: tenant.preferences?.whatsappReceipts ?? true,
       thermalPrinterName: tenant.preferences?.thermalPrinterName || '',
+      thermalPrintMode: tenant.preferences?.thermalPrintMode || 'browser',
+      cashDrawerKickEnabled: tenant.preferences?.cashDrawerKickEnabled ?? false,
       staffPinsEnabled: tenant.preferences?.staffPinsEnabled ?? false,
       receiptFooter: tenant.preferences?.receiptFooter || '',
       taxEnabled: tenant.preferences?.taxEnabled ?? false,
       taxRate: tenant.preferences?.taxRate ?? 18,
       taxInclusive: tenant.preferences?.taxInclusive ?? true,
+      efrisEnabled: tenant.preferences?.efrisEnabled ?? false,
+      efrisDeviceNo: tenant.preferences?.efrisDeviceNo || '',
+      efrisSandbox: tenant.preferences?.efrisSandbox ?? true,
+      loyaltyEnabled: tenant.preferences?.loyaltyEnabled ?? true,
+      loyaltyPointsPerUgx: tenant.preferences?.loyaltyPointsPerUgx ?? 10000,
+      loyaltyUgxPerPoint: tenant.preferences?.loyaltyUgxPerPoint ?? 100,
     });
   }, [tenant]);
 
@@ -306,7 +329,15 @@ export default function Settings() {
       mtnMerchantCode: prefs.mtnMerchantCode?.trim() || undefined,
       airtelMerchantCode: prefs.airtelMerchantCode?.trim() || undefined,
       thermalPrinterName: prefs.thermalPrinterName?.trim() || undefined,
+      thermalPrintMode: prefs.thermalPrintMode || 'browser',
+      cashDrawerKickEnabled: Boolean(prefs.cashDrawerKickEnabled),
       receiptFooter: prefs.receiptFooter?.trim() || undefined,
+      efrisEnabled: Boolean(prefs.efrisEnabled),
+      efrisDeviceNo: prefs.efrisDeviceNo?.trim() || undefined,
+      efrisSandbox: prefs.efrisSandbox ?? true,
+      loyaltyEnabled: prefs.loyaltyEnabled ?? true,
+      loyaltyPointsPerUgx: Math.max(100, Number(prefs.loyaltyPointsPerUgx) || 10000),
+      loyaltyUgxPerPoint: Math.max(1, Number(prefs.loyaltyUgxPerPoint) || 100),
     });
 
     const cleanedBranding = stripUndefined<TenantBranding>({
@@ -626,7 +657,11 @@ export default function Settings() {
                 : trialState.isComplimentary
                 ? `Complimentary: ${(tenant?.plan || 'micro').toUpperCase()}`
                 : trialState.isTrial
-                ? `Trial: ${trialState.daysRemaining}d left`
+                ? `Trial Day ${trialState.currentTrialDay}/${trialState.totalTrialDays} · ${
+                    trialState.wholeDaysRemaining >= 1
+                      ? `${trialState.wholeDaysRemaining}d ${trialState.remainingHours}h left`
+                      : `${trialState.hoursRemaining}h left`
+                  }`
                 : `Pack: ${(tenant?.plan || 'micro').toUpperCase()}`}
             </span>
           </Link>
@@ -821,7 +856,7 @@ export default function Settings() {
                       'p-2.5 rounded-xl border text-left transition-all',
                       isSelected
                         ? 'border-accent bg-accent/5 ring-2 ring-accent/20'
-                        : 'border-border bg-white hover:border-primary/40'
+                        : 'border-border bg-surface hover:border-primary/40'
                     )}
                   >
                     <div className="flex items-center gap-1.5 mb-1.5">
@@ -946,7 +981,7 @@ export default function Settings() {
             </div>
 
             {/* Live White-Label Preview Card */}
-            <div className="rounded-xl border border-border overflow-hidden shadow-sm bg-white">
+            <div className="rounded-xl border border-border overflow-hidden shadow-sm bg-surface">
               <div
                 className="px-4 py-3 flex items-center justify-between gap-3"
                 style={{ backgroundColor: previewPrimary, color: previewPrimaryText }}
@@ -977,16 +1012,54 @@ export default function Settings() {
                   Open POS
                 </span>
               </div>
-              <div className="px-4 py-3 flex items-center justify-between gap-3 bg-[#EDF1F6] text-xs">
+              <div className="px-4 py-3 flex items-center justify-between gap-3 bg-surface-alt text-xs">
                 <div className="flex items-center gap-2">
                   <Sparkles size={14} style={{ color: previewSecondary }} />
-                  <span className="font-semibold" style={{ color: previewPrimary }}>
+                  <span className="font-semibold text-primary">
                     Live preview across all branches &amp; receipts
                   </span>
                 </div>
                 <span className="text-[10px] text-text-muted">
                   Built &amp; managed by Novic Technologies
                 </span>
+              </div>
+            </div>
+
+            {/* Systematic Device Theme Preference */}
+            <div className="p-4 rounded-xl border border-border bg-surface-alt/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold text-primary">Device Appearance Mode</p>
+                <p className="text-[11px] text-text-muted">
+                  Saved per terminal with instant zero-flash theme switching.
+                </p>
+              </div>
+              <div className="inline-flex p-1 rounded-lg bg-surface border border-border gap-1">
+                {(
+                  [
+                    { id: 'light', label: 'Light', icon: Sun },
+                    { id: 'dark', label: 'Dark', icon: Moon },
+                    { id: 'system', label: 'System', icon: Monitor },
+                  ] as Array<{ id: ThemePreference; label: string; icon: React.ComponentType<{ size?: number }> }>
+                ).map((opt) => {
+                  const Icon = opt.icon;
+                  const active = themePreference === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setThemePreference(opt.id)}
+                      className={cn(
+                        'px-2.5 py-1.5 rounded-md text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap',
+                        active
+                          ? 'bg-accent text-white'
+                          : 'text-text-secondary hover:text-primary'
+                      )}
+                    >
+                      <Icon size={13} />
+                      <span>{opt.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1140,19 +1213,19 @@ export default function Settings() {
           description="Customize your printed and digital receipts."
         >
           <SettingItem
-            label="Thermal Printer"
+            label="Thermal Printer & Transport Mode"
             description={
               prefs.thermalPrinterName
-                ? `Configured: ${prefs.thermalPrinterName}`
-                : 'Set your preferred Bluetooth/USB ESC/POS printer.'
+                ? `${prefs.thermalPrinterName} (${(prefs.thermalPrintMode || 'browser').toUpperCase()})`
+                : 'Choose Browser Print, USB Serial, Web Bluetooth LE, or Android RawBT.'
             }
           >
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={async () => {
                   if (!tenant) return;
-                  const result = await printViaThermalSerial(
+                  const result = await printReceiptDispatch(
                     {
                       id: 'test-print',
                       tenantId: tenant.id,
@@ -1180,10 +1253,15 @@ export default function Settings() {
                       name: businessName || tenant.name,
                       tin: tin || tenant.tin,
                       branding,
+                      preferences: prefs,
                     }
                   );
                   toast.success(
-                    result.mode === 'serial'
+                    result.mode === 'bluetooth'
+                      ? 'Sent test receipt to Bluetooth ESC/POS printer'
+                      : result.mode === 'rawbt'
+                      ? 'Launched Android RawBT print intent'
+                      : result.mode === 'serial'
                       ? 'Sent test receipt to USB/Serial thermal printer'
                       : 'Opened browser print preview for receipt'
                   );
@@ -1197,19 +1275,61 @@ export default function Settings() {
                 onClick={() => setShowPrinterInput((v) => !v)}
                 className="btn btn-secondary text-xs whitespace-nowrap"
               >
-                {prefs.thermalPrinterName ? 'Edit Printer' : 'Connect Printer'}
+                {showPrinterInput ? 'Hide Config' : 'Configure Hardware'}
               </button>
             </div>
           </SettingItem>
           {showPrinterInput && (
-            <div className="space-y-3">
-              <input
-                type="text"
-                className="input w-full"
-                placeholder="e.g. Epson TM-T20III or 80mm USB Thermal"
-                value={prefs.thermalPrinterName || ''}
-                onChange={(e) => setPrefs({ ...prefs, thermalPrinterName: e.target.value })}
-              />
+            <div className="p-4 bg-surface-alt/50 rounded-xl space-y-3 border border-border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-primary mb-1">
+                    Print Dispatch Mode
+                  </label>
+                  <select
+                    className="input w-full text-xs"
+                    value={prefs.thermalPrintMode || 'browser'}
+                    onChange={(e) =>
+                      setPrefs({
+                        ...prefs,
+                        thermalPrintMode: e.target.value as TenantPreferences['thermalPrintMode'],
+                      })
+                    }
+                  >
+                    <option value="browser">Standard Browser Print (PDF / System Dialog)</option>
+                    <option value="bluetooth">Web Bluetooth LE (58mm/80mm Mobile ESC/POS)</option>
+                    <option value="rawbt">Android RawBT App Intent (Mobile ESC/POS)</option>
+                    <option value="serial">Desktop USB / COM Serial (Web Serial)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-primary mb-1">
+                    Printer Label (optional)
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full text-xs"
+                    placeholder="e.g. Xprinter 58mm BT or Epson TM-T20III"
+                    value={prefs.thermalPrinterName || ''}
+                    onChange={(e) => setPrefs({ ...prefs, thermalPrinterName: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t border-border/60">
+                <div>
+                  <span className="text-xs font-bold text-primary block">
+                    ESC/POS Cash Drawer Kick Pulse
+                  </span>
+                  <span className="text-[11px] text-text-muted">
+                    Send RJ11 cash drawer pulse (\x1B\x70) automatically on Cash sales.
+                  </span>
+                </div>
+                <ToggleSwitch
+                  checked={!!prefs.cashDrawerKickEnabled}
+                  onChange={(next) => setPrefs({ ...prefs, cashDrawerKickEnabled: next })}
+                  label="Toggle Cash Drawer Kick Pulse"
+                />
+              </div>
             </div>
           )}
 
@@ -1286,6 +1406,106 @@ export default function Settings() {
                   checked={prefs.taxInclusive ?? true}
                   onChange={(next) => setPrefs({ ...prefs, taxInclusive: next })}
                   label="Toggle Tax-Inclusive Pricing"
+                />
+              </div>
+            </div>
+          )}
+        </SettingSection>
+
+        <SettingSection
+          icon={FileCheck2}
+          title="URA EFRIS Fiscalization &amp; Customer Loyalty"
+          description="Issue URA EFRIS Fiscal Document Numbers (FDN + Verification QR) and reward repeat buyers with redeemable loyalty points."
+        >
+          <SettingItem
+            label="URA EFRIS Fiscal Receipting"
+            description="Automatically request an EFRIS FDN, verification code, and QR code on completed sales & credit notes."
+          >
+            <ToggleSwitch
+              checked={!!prefs.efrisEnabled}
+              onChange={(next) => setPrefs({ ...prefs, efrisEnabled: next })}
+              label="Toggle URA EFRIS Fiscal Receipting"
+            />
+          </SettingItem>
+          {prefs.efrisEnabled && (
+            <div className="p-4 bg-surface-alt/50 rounded-xl space-y-3 border border-border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-primary mb-1">
+                    EFRIS Device / EFD Number
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full font-mono text-xs"
+                    placeholder="e.g. EFD-UG-104920"
+                    value={prefs.efrisDeviceNo || ''}
+                    onChange={(e) => setPrefs({ ...prefs, efrisDeviceNo: e.target.value })}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-4 sm:pt-0">
+                  <div>
+                    <span className="text-xs font-bold text-primary block">Sandbox Mode</span>
+                    <span className="text-[11px] text-text-muted">
+                      Test fiscal receipts when live EFRIS gateway credentials are not yet set.
+                    </span>
+                  </div>
+                  <ToggleSwitch
+                    checked={prefs.efrisSandbox ?? true}
+                    onChange={(next) => setPrefs({ ...prefs, efrisSandbox: next })}
+                    label="Toggle EFRIS Sandbox Mode"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <SettingItem
+            label="POS Loyalty Points Program"
+            description="Earn points on customer purchases and redeem points as checkout discounts."
+          >
+            <ToggleSwitch
+              checked={prefs.loyaltyEnabled ?? true}
+              onChange={(next) => setPrefs({ ...prefs, loyaltyEnabled: next })}
+              label="Toggle POS Loyalty Points"
+            />
+          </SettingItem>
+          {(prefs.loyaltyEnabled ?? true) && (
+            <div className="p-4 bg-surface-alt/50 rounded-xl grid grid-cols-1 sm:grid-cols-2 gap-3 border border-border">
+              <div>
+                <label className="block text-xs font-bold text-primary mb-1 flex items-center gap-1.5">
+                  <Gift size={13} className="text-accent" />
+                  Earn Rate (UGX per 1 Point)
+                </label>
+                <input
+                  type="number"
+                  min={100}
+                  step={500}
+                  className="input w-full font-mono tabular-nums text-xs"
+                  value={prefs.loyaltyPointsPerUgx ?? 10000}
+                  onChange={(e) =>
+                    setPrefs({
+                      ...prefs,
+                      loyaltyPointsPerUgx: Math.max(100, Number(e.target.value) || 10000),
+                    })
+                  }
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-primary mb-1">
+                  Redeem Value (UGX per Point)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  step={50}
+                  className="input w-full font-mono tabular-nums text-xs"
+                  value={prefs.loyaltyUgxPerPoint ?? 100}
+                  onChange={(e) =>
+                    setPrefs({
+                      ...prefs,
+                      loyaltyUgxPerPoint: Math.max(1, Number(e.target.value) || 100),
+                    })
+                  }
                 />
               </div>
             </div>
@@ -1422,7 +1642,7 @@ export default function Settings() {
 
     {isAdmin && (
       <div className="mt-8 space-y-5">
-        <div className="card p-6 sm:p-8 border border-border bg-white">
+        <div className="card p-6 sm:p-8 border border-border bg-surface">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-start gap-4">
               <div className="p-3 bg-primary/5 text-primary rounded-xl shrink-0">
@@ -1445,6 +1665,31 @@ export default function Settings() {
               <Download size={16} />
               {isExportingBackup ? 'Preparing Archive...' : 'Download Full Backup (JSON)'}
             </button>
+          </div>
+        </div>
+
+        <div className="card p-6 sm:p-8 border border-border bg-surface">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-accent/10 text-accent rounded-xl shrink-0">
+                <Download size={22} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-primary">PrimeStock BMS System &amp; Feature Guide (PDF)</h3>
+                <p className="text-sm text-text-secondary mt-1 max-w-2xl">
+                  Download the complete 10-page manual explaining every system module, user role permissions,
+                  mobile/desktop POS operations, Uganda PAYE/NSSF payroll, URA EFRIS setup, and billing workflows.
+                </p>
+              </div>
+            </div>
+            <a
+              href="/PrimeStock-BMS-System-Guide.pdf"
+              download="PrimeStock-BMS-System-Guide.pdf"
+              className="btn btn-primary px-5 py-2.5 text-sm font-bold gap-2 whitespace-nowrap shrink-0"
+            >
+              <Download size={16} />
+              Download System Guide (PDF)
+            </a>
           </div>
         </div>
 
@@ -1484,7 +1729,7 @@ export default function Settings() {
 
     {showDeleteModal && isAdmin && (
       <div className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-danger/25 flex flex-col max-h-[90dvh]">
+        <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-danger/25 flex flex-col max-h-[90dvh]">
           <div className="p-5 bg-danger text-white flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2.5">
               <AlertTriangle size={20} />

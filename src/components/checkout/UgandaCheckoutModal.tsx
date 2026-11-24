@@ -35,6 +35,7 @@ export interface CheckoutCompletionPayload {
   cashTendered?: number;
   changeGiven?: number;
   splitPayments?: SplitPaymentPart[];
+  loyaltyPointsToRedeem?: number;
   status: 'completed' | 'pending';
 }
 
@@ -96,6 +97,19 @@ export function UgandaCheckoutModal({
   const [selectedBank, setSelectedBank] = useState(BANKS[0]);
   const [bankInstrument, setBankInstrument] = useState<'Bank Transfer' | 'Cheque'>('Bank Transfer');
 
+  // Loyalty redemption state
+  const loyaltyEnabled = tenant?.preferences?.loyaltyEnabled !== false;
+  const ugxPerPoint = Math.max(1, Number(tenant?.preferences?.loyaltyUgxPerPoint ?? 100));
+  const [redeemPoints, setRedeemPoints] = useState(0);
+
+  const maxRedeemPoints = useMemo(() => {
+    if (!loyaltyEnabled || !selectedCustomer || (selectedCustomer.loyaltyPoints || 0) <= 0) return 0;
+    return Math.min(selectedCustomer.loyaltyPoints || 0, Math.floor(total / ugxPerPoint));
+  }, [loyaltyEnabled, selectedCustomer, total, ugxPerPoint]);
+
+  const loyaltyDiscountUgx = Math.min(total, redeemPoints * ugxPerPoint);
+  const netPayable = Math.max(0, total - loyaltyDiscountUgx);
+
   // Split state
   const [splitParts, setSplitParts] = useState<SplitPaymentPart[]>([
     { method: 'Cash', amount: total },
@@ -105,6 +119,7 @@ export function UgandaCheckoutModal({
   useEffect(() => {
     if (!isOpen) return;
     setTab('cash');
+    setRedeemPoints(0);
     setCashTenderedInput(String(total));
     setPayerPhone(selectedCustomer?.phone || '');
     setPaymentReference('');
@@ -119,13 +134,21 @@ export function UgandaCheckoutModal({
     ]);
   }, [isOpen, total, selectedCustomer?.phone]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setCashTenderedInput(String(netPayable));
+    setSplitParts((prev) =>
+      prev.map((part, index) => (index === 0 ? { ...part, amount: netPayable } : { ...part, amount: 0 }))
+    );
+  }, [isOpen, netPayable]);
+
   const parsedPhone = useMemo(() => parseUgandaPhone(payerPhone), [payerPhone]);
   const cashTendered = Math.max(0, Number(cashTenderedInput) || 0);
-  const cashChange = Math.max(0, cashTendered - total);
-  const cashShortfall = Math.max(0, total - cashTendered);
+  const cashChange = Math.max(0, cashTendered - netPayable);
+  const cashShortfall = Math.max(0, netPayable - cashTendered);
 
   const splitAllocated = splitParts.reduce((sum, part) => sum + (Number(part.amount) || 0), 0);
-  const splitRemaining = total - splitAllocated;
+  const splitRemaining = netPayable - splitAllocated;
 
   const availableCredit = useMemo(() => {
     if (!selectedCustomer) return 0;
@@ -137,13 +160,13 @@ export function UgandaCheckoutModal({
     selectedCustomer &&
       (!selectedCustomer.creditLimit ||
         selectedCustomer.creditLimit <= 0 ||
-        (selectedCustomer.currentBalance || 0) + total <= selectedCustomer.creditLimit)
+        (selectedCustomer.currentBalance || 0) + netPayable <= selectedCustomer.creditLimit)
   );
 
   if (!isOpen) return null;
 
-  const mtnUssd = buildMtnMerchantUssd(tenant?.preferences?.mtnMerchantCode, total);
-  const airtelUssd = buildAirtelMerchantUssd(tenant?.preferences?.airtelMerchantCode, total);
+  const mtnUssd = buildMtnMerchantUssd(tenant?.preferences?.mtnMerchantCode, netPayable);
+  const airtelUssd = buildAirtelMerchantUssd(tenant?.preferences?.airtelMerchantCode, netPayable);
 
   const handleTriggerPrompt = async (provider: 'mtn_momo' | 'airtel_money') => {
     if (!parsedPhone.valid) {
@@ -166,7 +189,7 @@ export function UgandaCheckoutModal({
       const res = await initiateUgandaPayment({
         provider,
         phone: parsedPhone.e164,
-        amountUgx: total,
+        amountUgx: netPayable,
         reference: clientRef,
         customerName: selectedCustomer?.name,
         email: selectedCustomer?.email,
@@ -214,9 +237,11 @@ export function UgandaCheckoutModal({
     e.preventDefault();
     if (isProcessing) return;
 
+    const loyaltyPayload = redeemPoints > 0 ? { loyaltyPointsToRedeem: redeemPoints } : {};
+
     if (tab === 'cash') {
-      if (cashTendered < total) {
-        toast.error(`Cash tendered must be at least ${formatUGX(total)}`);
+      if (cashTendered < netPayable) {
+        toast.error(`Cash tendered must be at least ${formatUGX(netPayable)}`);
         return;
       }
       await onConfirm({
@@ -224,6 +249,7 @@ export function UgandaCheckoutModal({
         paymentProvider: 'cash',
         cashTendered,
         changeGiven: cashChange,
+        ...loyaltyPayload,
         status: 'completed',
       });
       return;
@@ -241,6 +267,7 @@ export function UgandaCheckoutModal({
         paymentProvider: tab,
         paymentReference: paymentReference.trim() || fallbackRef,
         payerPhone: parsedPhone.valid ? parsedPhone.e164 : undefined,
+        ...loyaltyPayload,
         status: 'completed',
       });
       return;
@@ -251,6 +278,7 @@ export function UgandaCheckoutModal({
         paymentMethod: 'Flutterwave',
         paymentProvider: 'flutterwave',
         paymentReference: paymentReference.trim() || `FLW-${Date.now().toString().slice(-6)}`,
+        ...loyaltyPayload,
         status: 'completed',
       });
       return;
@@ -262,6 +290,7 @@ export function UgandaCheckoutModal({
         paymentProvider: bankInstrument === 'Cheque' ? 'cheque' : 'bank',
         paymentReference:
           paymentReference.trim() || `${selectedBank.split(' ')[0].toUpperCase()}-${Date.now().toString().slice(-5)}`,
+        ...loyaltyPayload,
         status: 'completed',
       });
       return;
@@ -279,6 +308,7 @@ export function UgandaCheckoutModal({
       await onConfirm({
         paymentMethod: 'Customer Credit',
         paymentProvider: 'credit',
+        ...loyaltyPayload,
         status: 'completed',
       });
       return;
@@ -286,12 +316,12 @@ export function UgandaCheckoutModal({
 
     if (tab === 'split') {
       const validParts = splitParts.filter((p) => p.amount > 0);
-      if (validParts.length === 0) {
+      if (validParts.length === 0 && netPayable > 0) {
         toast.error('Enter amounts for at least one payment tender');
         return;
       }
       if (Math.abs(splitRemaining) > 1) {
-        toast.error(`Split amounts must equal ${formatUGX(total)}`);
+        toast.error(`Split amounts must equal ${formatUGX(netPayable)}`);
         return;
       }
       await onConfirm({
@@ -299,6 +329,7 @@ export function UgandaCheckoutModal({
         paymentProvider: 'split',
         paymentReference: paymentReference.trim() || undefined,
         splitPayments: validParts,
+        ...loyaltyPayload,
         status: 'completed',
       });
     }
@@ -349,7 +380,7 @@ export function UgandaCheckoutModal({
 
   return (
     <div className="fixed inset-0 bg-primary/60 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 no-print">
-      <div className="bg-white w-full max-w-2xl rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
+      <div className="bg-surface border border-border w-full max-w-2xl rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
           <div>
@@ -383,11 +414,51 @@ export function UgandaCheckoutModal({
                   Client: <strong className="text-primary">{selectedCustomer.name}</strong>
                 </p>
               )}
+              {loyaltyDiscountUgx > 0 && (
+                <p className="text-xs font-semibold text-accent mt-0.5 font-mono tabular-nums">
+                  {formatUGX(total)} − {formatUGX(loyaltyDiscountUgx)} loyalty ({redeemPoints} pts)
+                </p>
+              )}
             </div>
             <p className="text-3xl font-black text-primary font-mono tabular-nums">
-              {formatUGX(total)}
+              {formatUGX(netPayable)}
             </p>
           </div>
+
+          {selectedCustomer && loyaltyEnabled && (selectedCustomer.loyaltyPoints || 0) > 0 && maxRedeemPoints > 0 && (
+            <div className="p-3.5 rounded-xl border border-accent/30 bg-accent/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs">
+                <p className="font-bold text-primary">
+                  Redeem Loyalty Points ({selectedCustomer.loyaltyPoints} pts available)
+                </p>
+                <p className="text-text-secondary">
+                  1 pt = {formatUGX(ugxPerPoint)} · Max {maxRedeemPoints} pts ({formatUGX(maxRedeemPoints * ugxPerPoint)})
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <input
+                  type="number"
+                  min={0}
+                  max={maxRedeemPoints}
+                  aria-label="Loyalty points to redeem"
+                  value={redeemPoints || ''}
+                  placeholder="0"
+                  onChange={(e) => {
+                    const val = Math.max(0, Math.min(maxRedeemPoints, Math.floor(Number(e.target.value) || 0)));
+                    setRedeemPoints(val);
+                  }}
+                  className="input-sm w-24 font-mono tabular-nums text-right"
+                />
+                <button
+                  type="button"
+                  onClick={() => setRedeemPoints(redeemPoints === maxRedeemPoints ? 0 : maxRedeemPoints)}
+                  className="btn btn-secondary py-1.5 px-2.5 text-xs whitespace-nowrap"
+                >
+                  {redeemPoints === maxRedeemPoints ? 'Clear' : 'Use Max'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Payment Channel Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -408,7 +479,7 @@ export function UgandaCheckoutModal({
                       'p-3 rounded-xl border text-left transition-all flex flex-col gap-1',
                       active
                         ? 'border-accent bg-accent/5 ring-2 ring-accent/20'
-                        : 'border-border bg-white hover:bg-surface-alt/60'
+                        : 'border-border bg-surface hover:bg-surface-alt/60'
                     )}
                   >
                     <div className="flex items-center justify-between">
@@ -434,15 +505,15 @@ export function UgandaCheckoutModal({
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => setCashTenderedInput(String(total))}
+                    onClick={() => setCashTenderedInput(String(netPayable))}
                     className={cn(
                       'px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors whitespace-nowrap',
-                      cashTendered === total
+                      cashTendered === netPayable
                         ? 'bg-primary text-white border-primary'
-                        : 'bg-white text-primary border-border hover:border-accent'
+                        : 'bg-surface text-primary border-border hover:border-accent'
                     )}
                   >
-                    Exact ({formatUGX(total)})
+                    Exact ({formatUGX(netPayable)})
                   </button>
                   {UGX_CASH_NOTES.map((note) => (
                     <button
@@ -453,7 +524,7 @@ export function UgandaCheckoutModal({
                         'px-3 py-1.5 rounded-lg text-xs font-bold font-mono tabular-nums border transition-colors whitespace-nowrap',
                         cashTendered === note
                           ? 'bg-primary text-white border-primary'
-                          : 'bg-white text-primary border-border hover:border-accent'
+                          : 'bg-surface text-primary border-border hover:border-accent'
                       )}
                     >
                       {note.toLocaleString()}
@@ -471,7 +542,7 @@ export function UgandaCheckoutModal({
                     type="number"
                     min={0}
                     required
-                    className="input w-full text-lg font-bold font-mono tabular-nums bg-white"
+                    className="input w-full text-lg font-bold font-mono tabular-nums"
                     value={cashTenderedInput}
                     onChange={(e) => setCashTenderedInput(e.target.value)}
                     autoFocus
@@ -518,7 +589,7 @@ export function UgandaCheckoutModal({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1 p-1 bg-white rounded-lg border border-border">
+                <div className="flex items-center gap-1 p-1 bg-surface rounded-lg border border-border">
                   <button
                     type="button"
                     onClick={() => setMomoSubMode('merchant_ussd')}
@@ -547,7 +618,7 @@ export function UgandaCheckoutModal({
               </div>
 
               {momoSubMode === 'merchant_ussd' && (
-                <div className="p-3.5 rounded-xl bg-white border border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="p-3.5 rounded-xl bg-surface border border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-0.5 text-xs">
                     <p className="font-bold text-primary">
                       {tab === 'mtn_momo' ? 'MoMoPay Merchant Till' : 'Airtel Money Merchant Pay'}
@@ -579,7 +650,7 @@ export function UgandaCheckoutModal({
                   </label>
                   <input
                     type="tel"
-                    className="input w-full bg-white font-mono"
+                    className="input w-full font-mono"
                     placeholder={tab === 'mtn_momo' ? '0772 123 456' : '0752 123 456'}
                     value={payerPhone}
                     onChange={(e) => setPayerPhone(e.target.value)}
@@ -609,7 +680,7 @@ export function UgandaCheckoutModal({
                   </label>
                   <input
                     type="text"
-                    className="input w-full bg-white font-mono"
+                    className="input w-full font-mono"
                     placeholder={
                       tab === 'mtn_momo' ? 'e.g. MP250411.1234.C56789' : 'e.g. AM250411.9812.B441'
                     }
@@ -645,7 +716,7 @@ export function UgandaCheckoutModal({
               )}
 
               {gatewayFeedback && (
-                <div className="p-3 rounded-lg bg-white border border-border text-xs text-text-secondary">
+                <div className="p-3 rounded-lg bg-surface border border-border text-xs text-text-secondary">
                   {gatewayFeedback}
                 </div>
               )}
@@ -664,7 +735,7 @@ export function UgandaCheckoutModal({
                 </label>
                 <input
                   type="text"
-                  className="input w-full bg-white font-mono"
+                  className="input w-full font-mono"
                   placeholder="e.g. FLW-TX-902814 (optional)"
                   value={paymentReference}
                   onChange={(e) => setPaymentReference(e.target.value)}
@@ -679,7 +750,7 @@ export function UgandaCheckoutModal({
                 <div>
                   <label className="block text-xs font-bold text-primary mb-1">Instrument</label>
                   <select
-                    className="input w-full bg-white"
+                    className="input w-full"
                     value={bankInstrument}
                     onChange={(e) => setBankInstrument(e.target.value as 'Bank Transfer' | 'Cheque')}
                   >
@@ -690,7 +761,7 @@ export function UgandaCheckoutModal({
                 <div>
                   <label className="block text-xs font-bold text-primary mb-1">Ugandan Bank</label>
                   <select
-                    className="input w-full bg-white"
+                    className="input w-full"
                     value={selectedBank}
                     onChange={(e) => setSelectedBank(e.target.value)}
                   >
@@ -708,7 +779,7 @@ export function UgandaCheckoutModal({
                 </label>
                 <input
                   type="text"
-                  className="input w-full bg-white font-mono"
+                  className="input w-full font-mono"
                   placeholder="e.g. STANBIC-882410"
                   value={paymentReference}
                   onChange={(e) => setPaymentReference(e.target.value)}
@@ -756,7 +827,7 @@ export function UgandaCheckoutModal({
                       )}
                     >
                       {Number.isFinite(availableCredit)
-                        ? formatUGX(availableCredit - total)
+                        ? formatUGX(availableCredit - netPayable)
                         : 'Unlimited'}
                     </span>
                   </div>
@@ -770,10 +841,10 @@ export function UgandaCheckoutModal({
               {splitParts.map((part, idx) => (
                 <div
                   key={idx}
-                  className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-stretch sm:items-center p-2.5 sm:p-0 rounded-lg sm:rounded-none bg-white sm:bg-transparent border sm:border-0 border-border/70"
+                  className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-stretch sm:items-center p-2.5 sm:p-0 rounded-lg sm:rounded-none bg-surface sm:bg-transparent border sm:border-0 border-border/70"
                 >
                   <select
-                    className="input-sm sm:col-span-5 bg-white"
+                    className="input-sm sm:col-span-5"
                     value={part.method}
                     onChange={(e) =>
                       setSplitParts((prev) =>
@@ -791,7 +862,7 @@ export function UgandaCheckoutModal({
                     <input
                       type="number"
                       min={0}
-                      className="input-sm flex-1 sm:col-span-4 bg-white font-mono tabular-nums"
+                      className="input-sm flex-1 sm:col-span-4 font-mono tabular-nums"
                       value={part.amount || ''}
                       placeholder="0"
                       onChange={(e) =>
@@ -809,7 +880,7 @@ export function UgandaCheckoutModal({
                           (sum, p, i) => (i === idx ? sum : sum + (Number(p.amount) || 0)),
                           0
                         );
-                        const needed = Math.max(0, total - otherSum);
+                        const needed = Math.max(0, netPayable - otherSum);
                         setSplitParts((prev) =>
                           prev.map((p, i) => (i === idx ? { ...p, amount: needed } : p))
                         );
@@ -854,7 +925,7 @@ export function UgandaCheckoutModal({
 
               <input
                 type="text"
-                className="input w-full bg-white text-xs font-mono"
+                className="input w-full text-xs font-mono"
                 placeholder="Combined MoMo / EFT Reference (optional)"
                 value={paymentReference}
                 onChange={(e) => setPaymentReference(e.target.value)}
@@ -871,6 +942,7 @@ export function UgandaCheckoutModal({
                 onClick={() =>
                   onConfirm({
                     paymentMethod: 'Pending Invoice',
+                    ...(redeemPoints > 0 ? { loyaltyPointsToRedeem: redeemPoints } : {}),
                     status: 'pending',
                   })
                 }
@@ -884,14 +956,14 @@ export function UgandaCheckoutModal({
               type="submit"
               disabled={
                 isProcessing ||
-                (tab === 'cash' && cashTendered < total) ||
+                (tab === 'cash' && cashTendered < netPayable) ||
                 (tab === 'credit' && !creditAllowed) ||
                 (tab === 'split' && Math.abs(splitRemaining) > 1)
               }
               className="btn btn-primary flex-1 py-3 font-bold gap-2 whitespace-nowrap"
             >
               <CheckCircle2 size={17} />
-              {isProcessing ? 'Completing...' : `Confirm ${formatUGX(total)} Payment`}
+              {isProcessing ? 'Completing...' : `Confirm ${formatUGX(netPayable)} Payment`}
             </button>
           </div>
         </form>

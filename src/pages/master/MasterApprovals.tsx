@@ -178,10 +178,10 @@ export default function MasterApprovals() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[#0F1E33] tracking-tight">
+          <h1 className="text-2xl font-bold text-primary tracking-tight">
             Subscription Upgrade Approvals
           </h1>
-          <p className="text-sm text-[#475569] mt-0.5">
+          <p className="text-sm text-text-secondary mt-0.5">
             Verify submitted MTN MoMo, Airtel Money, Flutterwave, and Bank Transfer payments to activate or renew merchant plans.
           </p>
         </div>
@@ -195,38 +195,38 @@ export default function MasterApprovals() {
 
       {/* Queue KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4">
-          <p className="text-[11px] font-bold uppercase text-[#64748B]">Pending Reviews</p>
-          <p className="text-2xl font-bold font-mono tabular-nums text-[#0F1E33] mt-1">
+        <div className="bg-surface border border-border rounded-xl p-4">
+          <p className="text-[11px] font-bold uppercase text-text-muted">Pending Reviews</p>
+          <p className="text-2xl font-bold font-mono tabular-nums text-primary mt-1">
             {isLoading ? <KpiValueSkeleton className="w-12" /> : pendingOrgs.length}
           </p>
-          <p className="text-xs text-[#64748B] mt-0.5">Submitted payment references</p>
+          <p className="text-xs text-text-muted mt-0.5">Submitted payment references</p>
         </div>
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4">
-          <p className="text-[11px] font-bold uppercase text-[#64748B]">Pending Volume (UGX)</p>
-          <p className="text-2xl font-bold font-mono tabular-nums text-[#0F766E] mt-1">
+        <div className="bg-surface border border-border rounded-xl p-4">
+          <p className="text-[11px] font-bold uppercase text-text-muted">Pending Volume (UGX)</p>
+          <p className="text-2xl font-bold font-mono tabular-nums text-accent mt-1">
             {isLoading ? <KpiValueSkeleton className="w-28" /> : formatUGX(metrics.pendingValueUgx)}
           </p>
-          <p className="text-xs text-[#64748B] mt-0.5">Combined awaiting activation</p>
+          <p className="text-xs text-text-muted mt-0.5">Combined awaiting activation</p>
         </div>
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4">
-          <p className="text-[11px] font-bold uppercase text-[#64748B]">Active Paid Businesses</p>
-          <p className="text-2xl font-bold font-mono tabular-nums text-[#0F1E33] mt-1">
+        <div className="bg-surface border border-border rounded-xl p-4">
+          <p className="text-[11px] font-bold uppercase text-text-muted">Active Paid Businesses</p>
+          <p className="text-2xl font-bold font-mono tabular-nums text-primary mt-1">
             {isLoading ? <KpiValueSkeleton className="w-14" /> : metrics.activePaidCount}
           </p>
-          <p className="text-xs text-[#64748B] mt-0.5">Verified active subscriptions</p>
+          <p className="text-xs text-text-muted mt-0.5">Verified active subscriptions</p>
         </div>
       </div>
 
       {/* Queue List */}
-      <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-[#D5DEE9] flex items-center justify-between">
-          <h2 className="text-sm font-bold text-[#0F1E33]">
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <h2 className="text-sm font-bold text-primary">
             Submitted Upgrade &amp; Renewal Queue ({pendingOrgs.length})
           </h2>
           <Link
             to="/master/payments"
-            className="text-xs font-semibold text-[#0F766E] hover:underline flex items-center gap-1"
+            className="text-xs font-semibold text-accent hover:underline flex items-center gap-1"
           >
             <CreditCard size={13} />
             Configure Channels
@@ -234,7 +234,7 @@ export default function MasterApprovals() {
         </div>
 
         {isLoading ? (
-          <div className="divide-y divide-[#D5DEE9]">
+          <div className="divide-y divide-border">
             {Array.from({ length: 3 }).map((_, idx) => (
               <div key={idx} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                 <div className="space-y-2 flex-1">
@@ -254,14 +254,14 @@ export default function MasterApprovals() {
           </div>
         ) : pendingOrgs.length === 0 ? (
           <div className="p-12 text-center space-y-2">
-            <CheckCircle2 size={32} className="text-[#0F766E] mx-auto" />
-            <p className="text-sm font-bold text-[#0F1E33]">Approval queue is clear</p>
-            <p className="text-xs text-[#64748B]">
+            <CheckCircle2 size={32} className="text-accent mx-auto" />
+            <p className="text-sm font-bold text-primary">Approval queue is clear</p>
+            <p className="text-xs text-text-muted">
               New MoMo, Airtel Money, Flutterwave, and EFT upgrade submissions appear here automatically.
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-[#D5DEE9]">
+          <div className="divide-y divide-border">
             {pendingOrgs.map((org) => {
               const targetPlan = org.pendingPlan || org.plan;
               const quota = getPlanQuota(targetPlan);
@@ -271,25 +271,25 @@ export default function MasterApprovals() {
               return (
                 <div
                   key={org.id}
-                  className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-[#F1F5F9]"
+                  className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-surface-alt/60"
                 >
                   <div className="space-y-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-bold text-[#0F1E33]">{org.name}</span>
-                      <span className="text-xs font-semibold text-[#0F766E]">
+                      <span className="text-sm font-bold text-primary">{org.name}</span>
+                      <span className="text-xs font-semibold text-accent">
                         {getPlanQuota(org.plan).name} → {quota.name}
                       </span>
-                      <span className="font-mono tabular-nums text-xs font-bold text-[#0F1E33]">
+                      <span className="font-mono tabular-nums text-xs font-bold text-primary">
                         {formatUGX(amount)}
                       </span>
                     </div>
-                    <p className="text-xs text-[#475569]">
+                    <p className="text-xs text-text-secondary">
                       Owner: {org.ownerEmail || org.ownerName || '—'}
                       {org.pendingPayerPhone ? ` · Payer: ${org.pendingPayerPhone}` : ''}
                     </p>
-                    <p className="text-xs text-[#64748B] font-mono">
+                    <p className="text-xs text-text-muted font-mono">
                       Method: {org.pendingPaymentMethod || 'Manual'} · Ref:{' '}
-                      <strong className="text-[#0F1E33]">
+                      <strong className="text-primary">
                         {org.pendingPaymentRef || '—'}
                       </strong>
                       {org.pendingTransactionId
@@ -303,7 +303,7 @@ export default function MasterApprovals() {
                       <p
                         className={cn(
                           'text-xs font-semibold inline-flex items-center gap-1',
-                          probe.verified ? 'text-[#0F766E]' : 'text-amber-700'
+                          probe.verified ? 'text-accent' : 'text-amber-700 dark:text-amber-300'
                         )}
                       >
                         <ShieldCheck size={13} />
@@ -355,10 +355,10 @@ export default function MasterApprovals() {
       {/* Review & Approve / Decline Modal */}
       {liveReviewTarget && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-[#FBFDFF] rounded-xl border border-[#D5DEE9] shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface rounded-xl border border-border shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="px-5 py-4 bg-[#0B1F3A] text-white flex items-center justify-between shrink-0">
               <div>
-                <h3 className="text-base font-bold">Review Subscription Payment</h3>
+                <h3 className="text-base font-bold text-white">Review Subscription Payment</h3>
                 <p className="text-xs text-slate-300">{liveReviewTarget.name}</p>
               </div>
               <button
@@ -372,16 +372,16 @@ export default function MasterApprovals() {
             </div>
 
             <form onSubmit={handleConfirmDecision} className="p-5 space-y-4 overflow-y-auto flex-1">
-              <div className="p-3.5 rounded-lg bg-[#F1F5F9] border border-[#D5DEE9] text-xs space-y-1.5">
+              <div className="p-3.5 rounded-lg bg-surface-alt border border-border text-xs space-y-1.5">
                 <div className="flex justify-between">
-                  <span className="text-[#64748B]">Requested Plan</span>
-                  <strong className="text-[#0F1E33]">
+                  <span className="text-text-muted">Requested Plan</span>
+                  <strong className="text-primary">
                     {getPlanQuota(liveReviewTarget.pendingPlan || liveReviewTarget.plan).name}
                   </strong>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#64748B]">Submitted Amount</span>
-                  <strong className="font-mono tabular-nums text-[#0F1E33]">
+                  <span className="text-text-muted">Submitted Amount</span>
+                  <strong className="font-mono tabular-nums text-primary">
                     {formatUGX(
                       liveReviewTarget.pendingAmountUgx ||
                         getPlanQuota(
@@ -391,28 +391,28 @@ export default function MasterApprovals() {
                   </strong>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#64748B]">Payment Method</span>
-                  <span className="font-medium text-[#0F1E33]">
+                  <span className="text-text-muted">Payment Method</span>
+                  <span className="font-medium text-primary">
                     {liveReviewTarget.pendingPaymentMethod || 'Manual'}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#64748B]">Reference</span>
-                  <strong className="font-mono text-[#0F1E33]">
+                  <span className="text-text-muted">Reference</span>
+                  <strong className="font-mono text-primary">
                     {liveReviewTarget.pendingPaymentRef || '—'}
                   </strong>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 p-1 rounded-lg bg-[#F1F5F9]">
+              <div className="grid grid-cols-2 gap-2 p-1 rounded-lg bg-surface-alt">
                 <button
                   type="button"
                   onClick={() => setRejectMode(false)}
                   className={cn(
                     'py-1.5 rounded-md text-xs font-bold transition-colors',
                     !rejectMode
-                      ? 'bg-[#FBFDFF] text-[#0F1E33] shadow-xs'
-                      : 'text-[#64748B]'
+                      ? 'bg-surface text-primary shadow-xs'
+                      : 'text-text-muted'
                   )}
                 >
                   Approve &amp; Activate
@@ -423,8 +423,8 @@ export default function MasterApprovals() {
                   className={cn(
                     'py-1.5 rounded-md text-xs font-bold transition-colors',
                     rejectMode
-                      ? 'bg-[#FBFDFF] text-red-600 shadow-xs'
-                      : 'text-[#64748B]'
+                      ? 'bg-surface text-danger shadow-xs'
+                      : 'text-text-muted'
                   )}
                 >
                   Decline Payment
@@ -434,7 +434,7 @@ export default function MasterApprovals() {
               {!rejectMode ? (
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+                    <label className="block text-xs font-bold text-primary mb-1">
                       Plan to Activate
                     </label>
                     <select
@@ -454,7 +454,7 @@ export default function MasterApprovals() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+                    <label className="block text-xs font-bold text-primary mb-1">
                       Billing Cycle Duration
                     </label>
                     <select
@@ -479,7 +479,7 @@ export default function MasterApprovals() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+                    <label className="block text-xs font-bold text-primary mb-1">
                       Custom Monthly Rate Override (Optional UGX)
                     </label>
                     <input
@@ -494,7 +494,7 @@ export default function MasterApprovals() {
                 </div>
               ) : (
                 <div>
-                  <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+                  <label className="block text-xs font-bold text-primary mb-1">
                     Reason for Declining *
                   </label>
                   <textarea
@@ -522,7 +522,7 @@ export default function MasterApprovals() {
                   className={cn(
                     'btn flex-1 text-xs gap-1.5 whitespace-nowrap',
                     rejectMode
-                      ? 'bg-red-600 text-white hover:bg-red-700'
+                      ? 'bg-danger text-white hover:brightness-95'
                       : 'btn-primary'
                   )}
                 >

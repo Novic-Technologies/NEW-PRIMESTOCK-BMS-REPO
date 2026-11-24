@@ -154,6 +154,7 @@ export function useBilling() {
       const shouldSetPendingStatus =
         trialState.isExpired ||
         tenant.status === 'suspended' ||
+        tenant.status === 'locked' ||
         tenant.status === 'pending_approval';
       const nextStatus: Tenant['status'] = shouldSetPendingStatus ? 'pending_approval' : tenant.status;
 

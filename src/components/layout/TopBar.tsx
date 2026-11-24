@@ -42,6 +42,8 @@ import { getEffectiveStock } from '../../utils/branchStock';
 import { canAccessFeature } from '../../utils/planLimits';
 import { getSectionForRoute, hasSectionAccess } from '../../utils/rbac';
 import { PWAInstallButton } from '../shared/PWAInstallButton';
+import { ThemeToggleButton } from '../shared/ThemeToggleButton';
+import { SyncRecoveryDrawer } from '../shared/SyncRecoveryDrawer';
 import { SYSTEM_LOGO_URL } from '../../utils/branding';
 import { Product } from '../../types';
 import { cn } from '../../lib/utils';
@@ -61,7 +63,7 @@ export function TopBar({
 }: TopBarProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isOnline, status, pendingCount } = useSyncStore();
+  const { isOnline, status, pendingCount, failedCount } = useSyncStore();
   const { tenant, user, isMasterAdmin } = useAuthStore();
   const { sales } = usePOS();
   const { products } = useInventory();
@@ -75,6 +77,7 @@ export function TopBar({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
+  const [isSyncDrawerOpen, setIsSyncDrawerOpen] = useState(false);
 
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const mobileSearchRef = useRef<HTMLDivElement>(null);
@@ -312,7 +315,7 @@ export function TopBar({
       : 'Businesses & Multi-Tenant Overview';
 
     return (
-      <header className="h-16 bg-[#FBFDFF]/95 backdrop-blur-sm border-b border-border flex items-center justify-between px-4 md:px-8 sticky top-0 z-20 no-print">
+      <header className="h-16 bg-surface/95 backdrop-blur-sm border-b border-border flex items-center justify-between px-4 md:px-8 sticky top-0 z-20 no-print">
         <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
@@ -350,7 +353,8 @@ export function TopBar({
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          <ThemeToggleButton compact />
           <div className="hidden sm:block">
             <PWAInstallButton compact />
           </div>
@@ -366,7 +370,7 @@ export function TopBar({
   }
 
   return (
-    <header className="relative h-16 bg-[#FBFDFF]/95 backdrop-blur-sm border-b border-border flex items-center justify-between gap-2 px-3 sm:px-4 md:px-8 sticky top-0 z-20 no-print">
+    <header className="relative h-16 bg-surface/95 backdrop-blur-sm border-b border-border flex items-center justify-between gap-2 px-3 sm:px-4 md:px-8 sticky top-0 z-20 no-print">
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <button
           type="button"
@@ -406,11 +410,11 @@ export function TopBar({
             onKeyDown={(e) => {
               if (e.key === 'Escape') setIsSearchOpen(false);
             }}
-            className="pl-10 pr-4 py-2 bg-surface-alt border border-transparent focus:border-border rounded-lg text-sm w-44 lg:w-64 focus:bg-white focus:ring-2 focus:ring-accent/20 outline-none transition-all"
+            className="pl-10 pr-4 py-2 bg-surface-alt border border-transparent focus:border-border rounded-lg text-sm text-primary w-44 lg:w-64 focus:bg-surface focus:ring-2 focus:ring-accent/20 outline-none transition-all"
           />
 
           {isSearchOpen && searchQuery.trim() && (
-            <div className="absolute left-0 top-full mt-2 w-80 bg-white border border-border rounded-xl shadow-xl overflow-hidden z-50">
+            <div className="absolute left-0 top-full mt-2 w-80 bg-surface border border-border rounded-xl shadow-xl overflow-hidden z-50">
               {searchResults.length === 0 ? (
                 <div className="p-4 text-center text-sm text-text-muted">
                   No matches for &ldquo;{searchQuery}&rdquo;
@@ -485,7 +489,9 @@ export function TopBar({
         )}
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-3 md:gap-4 shrink-0">
+      <div className="flex items-center gap-1.5 sm:gap-2.5 md:gap-3 shrink-0">
+        <ThemeToggleButton compact />
+
         <div className="hidden md:block">
           <PWAInstallButton compact />
         </div>
@@ -501,20 +507,47 @@ export function TopBar({
 
         <button
           type="button"
-          onClick={() => onSyncNow?.()}
-          title={isOnline ? 'Click to sync pending changes' : 'Offline mode'}
-          className="hidden xs:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-alt text-[11px] md:text-xs font-medium hover:bg-border/60 transition-colors whitespace-nowrap"
+          onClick={() => {
+            if (pendingCount > 0 || failedCount > 0) {
+              setIsSyncDrawerOpen(true);
+            } else {
+              onSyncNow?.();
+            }
+          }}
+          title={
+            failedCount > 0
+              ? `${failedCount} failed sync items — click to inspect & retry`
+              : pendingCount > 0
+              ? `${pendingCount} offline items queued — click to inspect`
+              : isOnline
+              ? 'Click to sync'
+              : 'Offline mode'
+          }
+          className={cn(
+            'hidden xs:flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] md:text-xs font-medium transition-colors whitespace-nowrap',
+            failedCount > 0
+              ? 'bg-danger/10 border border-danger/30 text-danger hover:bg-danger/15'
+              : 'bg-surface-alt hover:bg-border/60'
+          )}
         >
           {status === 'syncing' ? (
             <RefreshCw size={14} className="animate-spin text-accent" />
+          ) : failedCount > 0 ? (
+            <AlertTriangle size={14} className="text-danger" />
           ) : isOnline ? (
             <Wifi size={14} className="text-accent" />
           ) : (
             <WifiOff size={14} className="text-danger" />
           )}
-          <span className={cn(isOnline ? 'text-primary' : 'text-danger')}>
-            {status === 'syncing' ? 'Syncing...' : isOnline ? 'Online' : 'Offline'}
-            {pendingCount > 0 && ` · ${pendingCount} pending`}
+          <span className={cn(failedCount > 0 || !isOnline ? 'text-danger' : 'text-primary')}>
+            {status === 'syncing'
+              ? 'Syncing...'
+              : failedCount > 0
+              ? `${failedCount} sync error${failedCount === 1 ? '' : 's'}`
+              : isOnline
+              ? 'Online'
+              : 'Offline'}
+            {failedCount === 0 && pendingCount > 0 && ` · ${pendingCount} pending`}
           </span>
         </button>
 
@@ -527,14 +560,14 @@ export function TopBar({
           >
             <Bell size={20} />
             {badgeCount > 0 && (
-              <span className="absolute top-0.5 right-0.5 min-w-[18px] h-[18px] px-1 bg-danger text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white tabular-nums">
+              <span className="absolute top-0.5 right-0.5 min-w-[18px] h-[18px] px-1 bg-danger text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-surface tabular-nums">
                 {badgeCount}
               </span>
             )}
           </button>
 
           {isAlertsOpen && (
-            <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 max-w-[calc(100vw-2rem)] bg-white border border-border rounded-xl shadow-xl overflow-hidden z-50">
+            <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 max-w-[calc(100vw-2rem)] bg-surface border border-border rounded-xl shadow-xl overflow-hidden z-50">
               <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 bg-surface-alt/60">
                 <div>
                   <span className="text-sm font-bold text-primary">Notifications</span>
@@ -566,26 +599,41 @@ export function TopBar({
                 )}
               </div>
 
-              {pendingCount > 0 && isOnline && onSyncNow && (
+              {pendingCount > 0 && (
                 <div className="px-4 py-2.5 bg-accent/5 border-b border-border flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-primary">
-                    {pendingCount} pending offline {pendingCount === 1 ? 'record' : 'records'}
+                    {pendingCount} queued offline {pendingCount === 1 ? 'record' : 'records'}
+                    {failedCount > 0 ? ` (${failedCount} failed)` : ''}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSyncNow();
-                      setIsAlertsOpen(false);
-                    }}
-                    className="text-xs font-bold text-accent hover:underline whitespace-nowrap"
-                  >
-                    Sync Now
-                  </button>
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAlertsOpen(false);
+                        setIsSyncDrawerOpen(true);
+                      }}
+                      className="text-xs font-bold text-text-secondary hover:text-primary whitespace-nowrap"
+                    >
+                      Inspect
+                    </button>
+                    {isOnline && onSyncNow && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSyncNow();
+                          setIsAlertsOpen(false);
+                        }}
+                        className="text-xs font-bold text-accent hover:underline whitespace-nowrap"
+                      >
+                        Sync Now
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 
               {smartPriorityTasks.length > 0 && (
-                <div className="px-4 py-2.5 bg-primary/[0.03] border-b border-border space-y-1.5">
+                <div className="px-4 py-2.5 bg-surface-alt/40 border-b border-border space-y-1.5">
                   <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-text-muted">
                     <Sparkles size={11} className="text-accent" />
                     <span>Top Actions Today</span>
@@ -598,7 +646,7 @@ export function TopBar({
                         setIsAlertsOpen(false);
                         navigate(task.actionRoute);
                       }}
-                      className="w-full text-left p-2 rounded-lg bg-white border border-border/80 hover:border-accent flex items-center justify-between gap-2 transition-colors"
+                      className="w-full text-left p-2 rounded-lg bg-surface border border-border/80 hover:border-accent flex items-center justify-between gap-2 transition-colors"
                     >
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-primary truncate">{task.title}</p>
@@ -626,7 +674,7 @@ export function TopBar({
                       key={item.id}
                       className={cn(
                         'p-3.5 flex items-start gap-2.5 transition-colors',
-                        !item.read ? 'bg-accent/5' : 'bg-white opacity-75'
+                        !item.read ? 'bg-accent/5' : 'bg-surface opacity-75'
                       )}
                     >
                       <div className="pt-0.5">{renderCategoryIcon(item)}</div>
@@ -697,7 +745,7 @@ export function TopBar({
       {isMobileSearchOpen && (
         <div
           ref={mobileSearchRef}
-          className="md:hidden absolute left-0 right-0 top-full bg-white border-b border-border shadow-xl p-3 z-40"
+          className="md:hidden absolute left-0 right-0 top-full bg-surface border-b border-border shadow-xl p-3 z-40"
         >
           <div className="relative">
             <Search
@@ -765,6 +813,12 @@ export function TopBar({
           )}
         </div>
       )}
+
+      <SyncRecoveryDrawer
+        open={isSyncDrawerOpen}
+        onClose={() => setIsSyncDrawerOpen(false)}
+        onSyncNow={onSyncNow}
+      />
     </header>
   );
 }

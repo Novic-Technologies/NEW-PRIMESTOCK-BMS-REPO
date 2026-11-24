@@ -440,7 +440,7 @@ export default function Payroll() {
       {/* Edit Staff Salary Modal */}
       {editingMember && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 no-print">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-lg font-bold text-white truncate pr-2">
                 Salary Profile · {editingMember.name}
@@ -511,7 +511,7 @@ export default function Payroll() {
       {/* Printable Payroll Payslips Modal */}
       {selectedRun && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white no-print shrink-0">
               <h3 className="text-lg font-bold text-white">
                 Payroll Payslips · {selectedRun.periodLabel}

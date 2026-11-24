@@ -354,7 +354,7 @@ export default function Suppliers() {
       {/* Add/Edit Supplier Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
             <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white shrink-0">
               <h2 className="text-xl font-bold text-white">
                 {editingSupplier ? 'Edit Supplier' : 'Add New Supplier'}
@@ -452,7 +452,7 @@ export default function Suppliers() {
       {/* Supplier Details Modal */}
       {historySupplier && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
             <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white shrink-0">
               <h2 className="text-lg font-bold text-white truncate pr-2">{historySupplier.name}</h2>
               <button
@@ -546,7 +546,7 @@ export default function Suppliers() {
       {/* Supplier Payment Modal */}
       {paySupplier && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90dvh]">
             <div className="p-6 border-b border-border flex justify-between items-center bg-primary text-white shrink-0">
               <div>
                 <h2 className="text-lg font-bold text-white">Pay Supplier Balance</h2>

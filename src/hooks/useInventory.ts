@@ -10,6 +10,7 @@ import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
 import { getEffectivePlanQuota, isQuotaExceeded } from '../utils/planLimits';
 import { canManageInventoryData } from '../utils/rbac';
+import { getNextExpiringBatch, getTotalBatchStock } from '../utils/inventoryMath';
 import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
 
@@ -64,12 +65,36 @@ export function useInventory() {
     }
 
     const targetBranch = activeBranchId && activeBranchId !== 'ALL' ? activeBranchId : user.branchId;
+    const rawBatches = Array.isArray(productData.batches) ? productData.batches.filter((b) => b.quantity > 0) : [];
+    const normalizedBatches =
+      rawBatches.length > 0
+        ? rawBatches.map((b) => ({ ...b, branchId: b.branchId || targetBranch || undefined }))
+        : productData.batchNumber || productData.expiryDate
+        ? [
+            {
+              id: crypto.randomUUID(),
+              batchNumber: productData.batchNumber || 'LOT-1',
+              expiryDate: productData.expiryDate,
+              quantity: Math.max(0, Number(productData.currentStock) || 0),
+              branchId: targetBranch || undefined,
+              unitCost: Number(productData.buyingPrice) || 0,
+              receivedAt: new Date().toISOString(),
+            },
+          ].filter((b) => b.quantity > 0)
+        : undefined;
+    const nextLot = getNextExpiringBatch(normalizedBatches);
+    const totalFromBatches = normalizedBatches?.length ? getTotalBatchStock(normalizedBatches) : Number(productData.currentStock) || 0;
+
     const initialBranchStock =
       productData.branchStock ||
-      (targetBranch ? { [targetBranch]: Number(productData.currentStock) || 0 } : undefined);
+      (targetBranch ? { [targetBranch]: totalFromBatches } : undefined);
 
     const newProduct: Product = stripUndefined({
       ...productData,
+      currentStock: totalFromBatches,
+      batches: normalizedBatches,
+      batchNumber: nextLot?.batchNumber || productData.batchNumber,
+      expiryDate: nextLot?.expiryDate || productData.expiryDate,
       branchStock: initialBranchStock,
       id: crypto.randomUUID(),
       tenantId: tenant.id,
@@ -251,7 +276,21 @@ export function useInventory() {
       const existing = await localDb.products.get(productId);
       if (!existing) return;
 
-      const updated: Product = stripUndefined({ ...existing, ...updates });
+      const mergedUpdates = { ...updates };
+      if (Array.isArray(mergedUpdates.batches)) {
+        const cleanedBatches = mergedUpdates.batches.filter((b) => (Number(b.quantity) || 0) > 0);
+        const nextLot = getNextExpiringBatch(cleanedBatches);
+        mergedUpdates.batches = cleanedBatches;
+        if (cleanedBatches.length > 0) {
+          mergedUpdates.batchNumber = nextLot?.batchNumber;
+          mergedUpdates.expiryDate = nextLot?.expiryDate;
+          if (mergedUpdates.currentStock === undefined) {
+            mergedUpdates.currentStock = getTotalBatchStock(cleanedBatches);
+          }
+        }
+      }
+
+      const updated: Product = stripUndefined({ ...existing, ...mergedUpdates });
       await localDb.products.put(updated);
 
       if (navigator.onLine) {

@@ -35,26 +35,33 @@ const PORT = Number(process.env.PORT || 3000);
 const MODEL_NAME = 'gemini-4-hydrogen';
 const FALLBACK_MODEL_NAME = 'gemini-3.1-flash-lite';
 
+let FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '';
+let FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || '(default)';
+
+try {
+  const cfgRaw = fs.readFileSync(path.resolve(__dirname, 'firebase-applet-config.json'), 'utf-8');
+  const cfg = JSON.parse(cfgRaw) as { projectId?: string; firestoreDatabaseId?: string };
+  if (!FIREBASE_PROJECT_ID && cfg.projectId) FIREBASE_PROJECT_ID = cfg.projectId;
+  if (cfg.firestoreDatabaseId) FIRESTORE_DATABASE_ID = cfg.firestoreDatabaseId;
+} catch {
+  // Fallback handled below
+}
+
 // Initialize Firebase Admin SDK with explicit projectId for verifyIdToken (works on Starter Tier without IAM)
 function ensureFirebaseAdmin() {
   if (getApps().length > 0) return;
-  let projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
-  if (!projectId) {
-    try {
-      const cfgRaw = fs.readFileSync(path.resolve(__dirname, 'firebase-applet-config.json'), 'utf-8');
-      const cfg = JSON.parse(cfgRaw) as { projectId?: string };
-      projectId = cfg.projectId;
-    } catch {
-      // Fallback handled below
-    }
-  }
-  initializeApp(projectId ? { projectId } : undefined);
+  initializeApp(FIREBASE_PROJECT_ID ? { projectId: FIREBASE_PROJECT_ID } : undefined);
 }
 
 ensureFirebaseAdmin();
 
+const MASTER_OWNER_EMAILS = new Set(['davidmagero22@gmail.com']);
+const DATA_DIR = path.resolve(__dirname, '.data');
+const FLUTTERWAVE_STORE_PATH = path.join(DATA_DIR, 'flutterwave-verified.json');
+
 interface AuthedRequest extends Request {
   authUser?: DecodedIdToken;
+  authBearerToken?: string;
 }
 
 // Simple per-user sliding window rate limiter (max 30 AI calls per 5 minutes)
@@ -85,6 +92,7 @@ async function requireFirebaseAuth(req: AuthedRequest, res: Response, next: Next
   try {
     const decoded = await getAuth().verifyIdToken(token);
     req.authUser = decoded;
+    req.authBearerToken = token;
     if (!checkRateLimit(decoded.uid)) {
       res.status(429).json({ error: 'Too many requests in a short window. Please wait a minute and retry.' });
       return;
@@ -93,6 +101,247 @@ async function requireFirebaseAuth(req: AuthedRequest, res: Response, next: Next
   } catch (err) {
     console.warn('Invalid Firebase ID token:', err instanceof Error ? err.message : err);
     res.status(401).json({ error: 'Invalid or expired session token. Please refresh or sign in again.' });
+  }
+}
+
+function toFirestoreValue(val: unknown): any {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'string') return { stringValue: val };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') {
+    return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+  }
+  if (Array.isArray(val)) {
+    return { arrayValue: { values: val.map(toFirestoreValue) } };
+  }
+  if (typeof val === 'object') {
+    const fields: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      if (v !== undefined) fields[k] = toFirestoreValue(v);
+    }
+    return { mapValue: { fields } };
+  }
+  return { stringValue: String(val) };
+}
+
+function fromFirestoreValue(v: any): any {
+  if (!v || typeof v !== 'object') return undefined;
+  if ('stringValue' in v) return String(v.stringValue);
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('booleanValue' in v) return Boolean(v.booleanValue);
+  if ('nullValue' in v) return null;
+  if ('timestampValue' in v) return String(v.timestampValue);
+  if ('arrayValue' in v) return (v.arrayValue?.values || []).map(fromFirestoreValue);
+  if ('mapValue' in v) {
+    const out: Record<string, any> = {};
+    const fields = v.mapValue?.fields || {};
+    for (const [k, fv] of Object.entries(fields)) {
+      out[k] = fromFirestoreValue(fv);
+    }
+    return out;
+  }
+  return undefined;
+}
+
+function fromFirestoreDocument(docJson: { name?: string; fields?: Record<string, any> }): Record<string, any> {
+  const out: Record<string, any> = {};
+  if (docJson.name) {
+    const parts = docJson.name.split('/');
+    out._docId = parts[parts.length - 1];
+  }
+  for (const [k, fv] of Object.entries(docJson.fields || {})) {
+    out[k] = fromFirestoreValue(fv);
+  }
+  return out;
+}
+
+function firestoreDocUrl(docPath: string): string {
+  return `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    FIREBASE_PROJECT_ID
+  )}/databases/${encodeURIComponent(FIRESTORE_DATABASE_ID)}/documents/${docPath}`;
+}
+
+async function firestoreRestGet(docPath: string, bearerToken: string): Promise<Record<string, any> | null> {
+  if (!FIREBASE_PROJECT_ID || !bearerToken) return null;
+  const res = await fetch(firestoreDocUrl(docPath), {
+    headers: { Authorization: `Bearer ${bearerToken}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) return null;
+  const json = (await res.json().catch(() => null)) as { name?: string; fields?: Record<string, any> } | null;
+  return json ? fromFirestoreDocument(json) : null;
+}
+
+async function firestoreRestList(collectionPath: string, bearerToken: string, pageSize = 200): Promise<Array<Record<string, any>>> {
+  if (!FIREBASE_PROJECT_ID || !bearerToken) return [];
+  const allDocs: Array<Record<string, any>> = [];
+  let pageToken = '';
+  const maxPages = 25;
+
+  for (let page = 0; page < maxPages; page++) {
+    const qs = new URLSearchParams({ pageSize: String(pageSize) });
+    if (pageToken) qs.set('pageToken', pageToken);
+    const res = await fetch(`${firestoreDocUrl(collectionPath)}?${qs.toString()}`, {
+      headers: { Authorization: `Bearer ${bearerToken}` },
+    });
+    if (!res.ok) break;
+    const json = (await res.json().catch(() => null)) as {
+      documents?: Array<{ name?: string; fields?: Record<string, any> }>;
+      nextPageToken?: string;
+    } | null;
+    if (Array.isArray(json?.documents)) {
+      allDocs.push(...json!.documents.map(fromFirestoreDocument));
+    }
+    if (!json?.nextPageToken) break;
+    pageToken = json.nextPageToken;
+  }
+
+  return allDocs;
+}
+
+async function firestoreRestPatch(
+  docPath: string,
+  data: Record<string, unknown>,
+  bearerToken: string
+): Promise<boolean> {
+  if (!FIREBASE_PROJECT_ID || !bearerToken) return false;
+  const entries = Object.entries(data).filter(([, v]) => v !== undefined);
+  if (entries.length === 0) return true;
+  const fields: Record<string, any> = {};
+  const maskParams = entries
+    .map(([k, v]) => {
+      fields[k] = toFirestoreValue(v);
+      return `updateMask.fieldPaths=${encodeURIComponent(k)}`;
+    })
+    .join('&');
+  const res = await fetch(`${firestoreDocUrl(docPath)}?${maskParams}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${bearerToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ fields }),
+  });
+  return res.ok;
+}
+
+const DEFAULT_AI_DAILY_LIMITS: Record<string, number> = {
+  micro: 5,
+  starter: 30,
+  business: 150,
+  enterprise: -1,
+};
+
+const DEFAULT_PLAN_PRICES_UGX: Record<string, number> = {
+  micro: 25_000,
+  starter: 65_000,
+  business: 145_000,
+  enterprise: 320_000,
+};
+
+const userTenantCache = new Map<string, { tenantId: string; role: string; expiresAt: number }>();
+
+async function resolveCallerProfile(req: AuthedRequest): Promise<{ tenantId: string | null; role: string | null }> {
+  const uid = req.authUser?.uid;
+  const token = req.authBearerToken;
+  if (!uid || !token) return { tenantId: null, role: null };
+  const cached = userTenantCache.get(uid);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { tenantId: cached.tenantId, role: cached.role };
+  }
+  const userDoc = await firestoreRestGet(`users/${uid}`, token);
+  const tid = typeof userDoc?.tenantId === 'string' ? userDoc.tenantId : null;
+  const role = typeof userDoc?.role === 'string' ? userDoc.role : null;
+  if (tid && role) {
+    userTenantCache.set(uid, { tenantId: tid, role, expiresAt: Date.now() + 60_000 });
+  }
+  return { tenantId: tid, role };
+}
+
+async function resolveCallerTenantId(req: AuthedRequest): Promise<string | null> {
+  const profile = await resolveCallerProfile(req);
+  return profile.tenantId;
+}
+
+function isMasterAdminUser(req: AuthedRequest): boolean {
+  const email = (req.authUser?.email || '').toLowerCase();
+  return Boolean(req.authUser?.email_verified && MASTER_OWNER_EMAILS.has(email));
+}
+
+async function enforceAndRecordAiQuota(
+  req: AuthedRequest,
+  actionName: string
+): Promise<{ dateKey: string; count: number; limit: number; tenantId: string | null }> {
+  const today = new Date().toISOString().split('T')[0];
+  const token = req.authBearerToken || '';
+
+  if (isMasterAdminUser(req)) {
+    return { dateKey: today, count: 0, limit: -1, tenantId: 'platform' };
+  }
+
+  let resolvedTenantId: string | null = null;
+  try {
+    resolvedTenantId = await resolveCallerTenantId(req);
+    if (!resolvedTenantId || resolvedTenantId === 'platform') {
+      return { dateKey: today, count: 0, limit: -1, tenantId: resolvedTenantId };
+    }
+
+    const [tenantDoc, plansDoc, usageDoc] = await Promise.all([
+      firestoreRestGet(`tenants/${resolvedTenantId}`, token),
+      firestoreRestGet('platformConfig/plans', token),
+      firestoreRestGet(`tenants/${resolvedTenantId}/aiUsage/${today}`, token),
+    ]);
+
+    const plan = String(tenantDoc?.plan || 'micro').toLowerCase();
+    const strictEnforcement =
+      typeof plansDoc?.strictEnforcement === 'boolean' ? plansDoc.strictEnforcement : true;
+    const configuredLimit = plansDoc?.tiers?.[plan]?.aiDailyAllowance;
+    const limit =
+      typeof configuredLimit === 'number'
+        ? configuredLimit
+        : DEFAULT_AI_DAILY_LIMITS[plan] ?? 30;
+    const currentCount = Number(usageDoc?.count || 0);
+
+    if (strictEnforcement && limit >= 0 && currentCount >= limit) {
+      const err = new Error(
+        `Daily AI call limit (${currentCount}/${limit}) reached for your ${plan.toUpperCase()} plan. Upgrade in Billing or try again tomorrow.`
+      ) as Error & { httpStatus?: number };
+      err.httpStatus = 429;
+      throw err;
+    }
+
+    const nextCount = currentCount + 1;
+    const patched = await firestoreRestPatch(
+      `tenants/${resolvedTenantId}/aiUsage/${today}`,
+      {
+        id: today,
+        dateKey: today,
+        tenantId: resolvedTenantId,
+        count: nextCount,
+        lastAction: actionName.slice(0, 64),
+        updatedAt: new Date().toISOString(),
+      },
+      token
+    );
+    if (!patched) {
+      console.warn(`[AI Quota] Failed to persist daily usage increment for tenant ${resolvedTenantId}`);
+    }
+
+    return { dateKey: today, count: nextCount, limit, tenantId: resolvedTenantId };
+  } catch (err: any) {
+    if (err?.httpStatus === 429) {
+      throw err;
+    }
+    console.error('[AI Quota] Enforcement check failed:', err);
+    if (resolvedTenantId && resolvedTenantId !== 'platform') {
+      const quotaErr = new Error(
+        'Unable to verify daily AI quota right now. Please retry in a moment.'
+      ) as Error & { httpStatus?: number };
+      quotaErr.httpStatus = 503;
+      throw quotaErr;
+    }
+    return { dateKey: today, count: 0, limit: -1, tenantId: null };
   }
 }
 
@@ -200,8 +449,15 @@ async function generateContentWithRetry(
 }
 
 function formatAiError(error: unknown): { status: number; message: string } {
+  const errWithStatus = error as { httpStatus?: number } | null;
   const raw = error instanceof Error ? error.message : String(error);
   const readable = extractReadableErrorText(error);
+  if (errWithStatus?.httpStatus === 429) {
+    return { status: 429, message: raw };
+  }
+  if (errWithStatus?.httpStatus === 503) {
+    return { status: 503, message: raw };
+  }
   if (raw.includes('GEMINI_API_KEY is not configured')) {
     return { status: 503, message: raw };
   }
@@ -240,10 +496,49 @@ function formatAiError(error: unknown): { status: number; message: string } {
 
 async function startServer() {
   const app = express();
+  app.disable('x-powered-by');
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self)');
+    res.setHeader('X-XSS-Protection', '0');
+    next();
+  });
   app.use(express.json({ limit: '20mb' }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
     res.json({ ok: true, model: MODEL_NAME, fallbackModel: FALLBACK_MODEL_NAME });
+  });
+
+  app.get('/api/ai/usage', requireFirebaseAuth, async (req: AuthedRequest, res: Response) => {
+    const today = new Date().toISOString().split('T')[0];
+    try {
+      const tenantId = await resolveCallerTenantId(req);
+      const token = req.authBearerToken || '';
+      if (!tenantId || tenantId === 'platform') {
+        res.json({ dateKey: today, count: 0, limit: -1, tenantId });
+        return;
+      }
+      const [tenantDoc, plansDoc, usageDoc] = await Promise.all([
+        firestoreRestGet(`tenants/${tenantId}`, token),
+        firestoreRestGet('platformConfig/plans', token),
+        firestoreRestGet(`tenants/${tenantId}/aiUsage/${today}`, token),
+      ]);
+      const plan = String(tenantDoc?.plan || 'micro').toLowerCase();
+      const configuredLimit = plansDoc?.tiers?.[plan]?.aiDailyAllowance;
+      const limit =
+        typeof configuredLimit === 'number'
+          ? configuredLimit
+          : DEFAULT_AI_DAILY_LIMITS[plan] ?? 30;
+      res.json({
+        dateKey: today,
+        count: Number(usageDoc?.count || 0),
+        limit,
+        tenantId,
+      });
+    } catch {
+      res.json({ dateKey: today, count: 0, limit: -1, tenantId: null });
+    }
   });
 
   // 1. Live AI Business Copilot Q&A + Multilingual + In-App How-To Help
@@ -255,6 +550,7 @@ async function startServer() {
         return;
       }
 
+      await enforceAndRecordAiQuota(req, 'copilot');
       const ai = getAiClient();
       const contextJson = JSON.stringify(businessContext || {});
       const historyText = Array.isArray(history)
@@ -316,6 +612,7 @@ async function startServer() {
         return;
       }
 
+      await enforceAndRecordAiQuota(req, 'restock_forecast');
       const ai = getAiClient();
       const trimmedItems = items.slice(0, 60);
 
@@ -380,6 +677,7 @@ async function startServer() {
         return;
       }
 
+      await enforceAndRecordAiQuota(req, 'scan_document');
       const ai = getAiClient();
       const base64Clean = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
       const safeMime = typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : 'image/jpeg';
@@ -453,6 +751,7 @@ async function startServer() {
         return;
       }
 
+      await enforceAndRecordAiQuota(req, 'dead_stock_margin');
       const ai = getAiClient();
       const response = await generateContentWithRetry(ai, {
         thinkingLevel: ThinkingLevel.LOW,
@@ -517,6 +816,7 @@ async function startServer() {
       const langName =
         language === 'lg' ? 'Luganda' : language === 'sw' ? 'Swahili' : 'English';
 
+      await enforceAndRecordAiQuota(req, 'debt_reminder');
       const ai = getAiClient();
       const response = await generateContentWithRetry(ai, {
         thinkingLevel: ThinkingLevel.LOW,
@@ -559,6 +859,7 @@ async function startServer() {
         return;
       }
 
+      await enforceAndRecordAiQuota(req, 'eod_digest');
       const ai = getAiClient();
       const response = await generateContentWithRetry(ai, {
         thinkingLevel: ThinkingLevel.LOW,
@@ -1497,6 +1798,46 @@ async function startServer() {
 
           // Fast deterministic coordinate-aware multi-table extraction across all pages
           const { tables: pdfTables, docTitle } = extractPdfTablesWithCoordinates(items);
+          const skippedTables = pdfTables
+            .filter((t) => t.isComputedSummary)
+            .map((t) => ({
+              sectionTitle: t.sectionTitle || 'Computed Summary Report',
+              pageStart: t.pageStart,
+              pageEnd: t.pageEnd,
+              rowCount: t.rawRows.length,
+              reason:
+                'Computed financial summary / dashboard report skipped to avoid duplicate totals (Operating Expenses and transaction tables remain selected).',
+            }));
+
+          const nonSummaryTables = pdfTables.filter((t) => !t.isComputedSummary && t.rawRows.length > 0);
+          const mappedMultiTables = [] as Array<Record<string, any>>;
+          for (let idx = 0; idx < nonSummaryTables.length; idx++) {
+            const tbl = nonSummaryTables[idx];
+            const forced = entityType === 'auto' ? detectServerEntityType(tbl.headers, `${tbl.sectionTitle} ${docTitle}`) : (entityType as SmartEntityType);
+            const tblPayload = await mapTabularDataset(
+              tbl.headers,
+              tbl.rawRows,
+              `PDF Table (${tbl.sectionTitle || `Section ${idx + 1}`})`,
+              forced
+            );
+            if (tblPayload.rows.length > 0) {
+              mappedMultiTables.push({
+                id: `tbl-${idx + 1}-${tbl.pageStart}`,
+                sectionTitle: tbl.sectionTitle || `${forced.toUpperCase()} Table (Page ${tbl.pageStart})`,
+                entityType: tblPayload.entityType,
+                detectionConfidence: tblPayload.detectionConfidence,
+                pageStart: tbl.pageStart,
+                pageEnd: tbl.pageEnd,
+                sourceHeaders: tblPayload.sourceHeaders,
+                fieldMappings: tblPayload.fieldMappings,
+                rawSpreadsheetRows: tblPayload.rawSpreadsheetRows,
+                rows: tblPayload.rows,
+                warnings: tblPayload.warnings,
+                selected: true,
+              });
+            }
+          }
+
           const chosenPdf = selectBestPdfTable(pdfTables, entityType, fileName, docTitle);
           if (chosenPdf && chosenPdf.table.rawRows.length > 0) {
             const pdfPayload = await mapTabularDataset(
@@ -1506,7 +1847,11 @@ async function startServer() {
               chosenPdf.entityType
             );
             if (pdfPayload.rows.length > 0) {
-              res.json(pdfPayload);
+              res.json({
+                ...pdfPayload,
+                multiTables: mappedMultiTables,
+                skippedTables,
+              });
               return;
             }
           }
@@ -2054,7 +2399,8 @@ async function startServer() {
             : 'Enter your Flutterwave or Card payment reference to complete verification.',
       });
     } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to initiate payment' });
+      console.error('Uganda payment initiation error:', error);
+      res.status(500).json({ error: 'Failed to initiate Ugandan payment request.' });
     }
   });
 
@@ -2072,6 +2418,40 @@ async function startServer() {
 
   const verifiedFlutterwaveTxs = new Map<string, VerifiedFlutterwaveRecord>();
 
+  // Hydrate persisted verified Flutterwave webhook records on boot
+  try {
+    if (fs.existsSync(FLUTTERWAVE_STORE_PATH)) {
+      const rawPersisted = JSON.parse(fs.readFileSync(FLUTTERWAVE_STORE_PATH, 'utf8'));
+      if (Array.isArray(rawPersisted)) {
+        for (const rec of rawPersisted as VerifiedFlutterwaveRecord[]) {
+          if (rec?.transactionId) verifiedFlutterwaveTxs.set(rec.transactionId, rec);
+          if (rec?.txRef) verifiedFlutterwaveTxs.set(rec.txRef, rec);
+          if (rec?.flwRef) verifiedFlutterwaveTxs.set(rec.flwRef, rec);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Could not load persisted Flutterwave webhook store:', err);
+  }
+
+  function persistVerifiedFlutterwaveStore() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const uniqueByTxId = new Map<string, VerifiedFlutterwaveRecord>();
+      for (const rec of verifiedFlutterwaveTxs.values()) {
+        if (rec?.transactionId) uniqueByTxId.set(rec.transactionId, rec);
+      }
+      const records = Array.from(uniqueByTxId.values()).slice(-500);
+      const tmpPath = `${FLUTTERWAVE_STORE_PATH}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(records, null, 2), 'utf8');
+      fs.renameSync(tmpPath, FLUTTERWAVE_STORE_PATH);
+    } catch (err) {
+      console.warn('Failed to persist verified Flutterwave webhook record:', err);
+    }
+  }
+
   function recordVerifiedFlutterwaveTx(record: VerifiedFlutterwaveRecord) {
     if (verifiedFlutterwaveTxs.size > 1000) {
       const oldestKey = verifiedFlutterwaveTxs.keys().next().value;
@@ -2080,6 +2460,7 @@ async function startServer() {
     if (record.transactionId) verifiedFlutterwaveTxs.set(record.transactionId, record);
     if (record.txRef) verifiedFlutterwaveTxs.set(record.txRef, record);
     if (record.flwRef) verifiedFlutterwaveTxs.set(record.flwRef, record);
+    persistVerifiedFlutterwaveStore();
   }
 
   function safeEqualsSecret(incomingSig: string, expectedSecret: string): boolean {
@@ -2209,13 +2590,21 @@ async function startServer() {
           res.json({
             found: true,
             gatewayVerified: cached.status === 'successful',
-            ...cached,
+            transactionId: cached.transactionId,
+            txRef: cached.txRef,
+            flwRef: cached.flwRef,
+            status: cached.status,
+            amount: cached.amount,
+            currency: cached.currency,
+            paymentType: cached.paymentType,
+            verifiedAt: cached.verifiedAt,
           });
           return;
         }
         res.json({ found: false, gatewayVerified: false });
       } catch (error) {
-        res.status(500).json({ found: false, error: error instanceof Error ? error.message : 'Status check failed' });
+        console.error('Webhook status check error:', error);
+        res.status(500).json({ found: false, error: 'Failed to check webhook status.' });
       }
     }
   );
@@ -2284,7 +2673,8 @@ async function startServer() {
           gatewayVerified: flwData.data?.status === 'successful',
         });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Status check failed' });
+        console.error('Gateway payment status check error:', error);
+        res.status(500).json({ error: 'Failed to check gateway payment status.' });
       }
     }
   );
@@ -2293,8 +2683,52 @@ async function startServer() {
   app.post('/api/billing/verify-payment', requireFirebaseAuth, async (req: AuthedRequest, res: Response) => {
     try {
       const { plan, amountUgx, paymentMethod, reference, transactionId } = req.body || {};
-      if (!plan || !paymentMethod || !reference || typeof reference !== 'string' || reference.trim().length < 4) {
+      const cleanPlan = String(plan || '').toLowerCase();
+      if (!(cleanPlan in DEFAULT_PLAN_PRICES_UGX)) {
+        res.status(400).json({ error: 'A valid subscription plan tier is required.' });
+        return;
+      }
+      const numericAmount = Number(amountUgx);
+      if (!Number.isFinite(numericAmount) || numericAmount < 1000) {
+        res.status(400).json({ error: 'Valid subscription payment amount (UGX) is required.' });
+        return;
+      }
+      if (!paymentMethod || !reference || typeof reference !== 'string' || reference.trim().length < 4) {
         res.status(400).json({ error: 'Valid plan, payment method, and transaction reference (min 4 chars) are required.' });
+        return;
+      }
+
+      const token = req.authBearerToken || '';
+      const callerTenantId = await resolveCallerTenantId(req);
+      const [plansDoc, tenantDoc] = await Promise.all([
+        token ? firestoreRestGet('platformConfig/plans', token).catch(() => null) : Promise.resolve(null),
+        token && callerTenantId && callerTenantId !== 'platform'
+          ? firestoreRestGet(`tenants/${callerTenantId}`, token).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      const configuredMonthly = Number(plansDoc?.tiers?.[cleanPlan]?.monthlyPriceUgx);
+      const standardMonthly =
+        Number.isFinite(configuredMonthly) && configuredMonthly > 0
+          ? configuredMonthly
+          : DEFAULT_PLAN_PRICES_UGX[cleanPlan];
+      const customPrice =
+        tenantDoc?.plan === cleanPlan && typeof tenantDoc?.customPriceUgx === 'number' && tenantDoc.customPriceUgx >= 0
+          ? tenantDoc.customPriceUgx
+          : null;
+      const effectiveMonthly = customPrice !== null ? customPrice : standardMonthly;
+
+      const maxDiscountPct = Math.max(
+        0,
+        Number(plansDoc?.multiMonthDiscounts?.m12 ?? 20),
+        Number(plansDoc?.multiMonthDiscounts?.m6 ?? 10),
+        Number(plansDoc?.multiMonthDiscounts?.m3 ?? 5)
+      );
+      const minExpectedSingleCycle = Math.floor(effectiveMonthly * (1 - maxDiscountPct / 100));
+      if (effectiveMonthly > 0 && Math.round(numericAmount) < minExpectedSingleCycle) {
+        res.status(400).json({
+          error: `Submitted amount (${Math.round(numericAmount)}) is below the minimum expected fee for ${cleanPlan.toUpperCase()}.`,
+        });
         return;
       }
 
@@ -2303,7 +2737,12 @@ async function startServer() {
       const cached =
         (cleanTxId && verifiedFlutterwaveTxs.get(cleanTxId)) || verifiedFlutterwaveTxs.get(cleanRef);
 
-      if (cached && cached.status === 'successful' && cached.amount >= Number(amountUgx || 0)) {
+      if (
+        cached &&
+        cached.status === 'successful' &&
+        String(cached.currency || '').toUpperCase() === 'UGX' &&
+        cached.amount >= numericAmount
+      ) {
         res.json({
           verified: true,
           gatewayVerified: true,
@@ -2335,10 +2774,11 @@ async function startServer() {
           !verifyRes.ok ||
           flwData.status !== 'success' ||
           flwData.data?.status !== 'successful' ||
-          Number(flwData.data?.amount || 0) < Number(amountUgx || 0)
+          String(flwData.data?.currency || '').toUpperCase() !== 'UGX' ||
+          Number(flwData.data?.amount || 0) < numericAmount
         ) {
           res.status(402).json({
-            error: 'Gateway payment could not be verified or paid amount did not match plan cost.',
+            error: 'Gateway payment could not be verified or paid amount/currency did not match plan cost.',
           });
           return;
         }
@@ -2373,7 +2813,8 @@ async function startServer() {
         verifiedByUid: req.authUser?.uid,
       });
     } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Payment verification failed' });
+      console.error('Billing payment verification error:', error);
+      res.status(500).json({ error: 'Payment verification failed.' });
     }
   });
 
@@ -2451,12 +2892,57 @@ async function startServer() {
     });
   });
 
+  const emailRateBuckets = new Map<string, number[]>();
+  function checkEmailRateLimit(uid: string): boolean {
+    const now = Date.now();
+    const windowMs = 10 * 60 * 1000;
+    const timestamps = (emailRateBuckets.get(uid) || []).filter((ts) => now - ts < windowMs);
+    if (timestamps.length >= 15) {
+      emailRateBuckets.set(uid, timestamps);
+      return false;
+    }
+    timestamps.push(now);
+    emailRateBuckets.set(uid, timestamps);
+    return true;
+  }
+
+  function escapeHtmlText(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   app.post('/api/notifications/send-email', requireFirebaseAuth, async (req: AuthedRequest, res: Response) => {
     try {
+      const uid = req.authUser?.uid || '';
+      const isMaster = isMasterAdminUser(req);
+      if (!isMaster) {
+        const caller = await resolveCallerProfile(req);
+        if (caller.role !== 'admin' && caller.role !== 'manager') {
+          res.status(403).json({
+            sent: false,
+            error: 'Only workspace admins, managers, or Master Admins can send transactional emails.',
+          });
+          return;
+        }
+      }
+
+      if (!checkEmailRateLimit(uid)) {
+        res.status(429).json({
+          sent: false,
+          error: 'Too many outbound emails sent recently. Please wait a few minutes and retry.',
+        });
+        return;
+      }
+
       const { to, subject, text, html, replyTo } = req.body || {};
       const cleanTo = typeof to === 'string' ? to.trim() : '';
       const cleanSubject = typeof subject === 'string' ? subject.trim() : '';
       const cleanText = typeof text === 'string' ? text.trim() : '';
+      const cleanHtml = typeof html === 'string' && html.trim() ? html : undefined;
       const cleanReplyTo =
         typeof replyTo === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo.trim())
           ? replyTo.trim()
@@ -2468,6 +2954,10 @@ async function startServer() {
       }
       if (!cleanSubject || !cleanText) {
         res.status(400).json({ error: 'Email subject and body text are required.' });
+        return;
+      }
+      if (cleanSubject.length > 200 || cleanText.length > 8000 || (cleanHtml && cleanHtml.length > 40000)) {
+        res.status(400).json({ error: 'Email subject or body exceeds maximum allowed size.' });
         return;
       }
 
@@ -2495,7 +2985,7 @@ async function startServer() {
             subject: cleanSubject,
             text: cleanText,
             ...(cleanReplyTo ? { reply_to: cleanReplyTo } : {}),
-            ...(typeof html === 'string' && html.trim() ? { html } : {}),
+            ...(cleanHtml ? { html: cleanHtml } : {}),
           }),
         });
         const resendJson = (await resendRes.json().catch(() => ({}))) as { id?: string; message?: string };
@@ -2533,7 +3023,7 @@ async function startServer() {
         ...(cleanReplyTo ? { replyTo: cleanReplyTo } : {}),
         subject: cleanSubject,
         text: cleanText,
-        ...(typeof html === 'string' && html.trim() ? { html } : {}),
+        ...(cleanHtml ? { html: cleanHtml } : {}),
       });
 
       res.json({
@@ -2552,6 +3042,18 @@ async function startServer() {
 
   app.post('/api/notifications/test-email', requireFirebaseAuth, async (req: AuthedRequest, res: Response) => {
     try {
+      const isMaster = isMasterAdminUser(req);
+      if (!isMaster) {
+        const caller = await resolveCallerProfile(req);
+        if (caller.role !== 'admin') {
+          res.status(403).json({
+            sent: false,
+            error: 'Only workspace admins or Master Admins can trigger email transport tests.',
+          });
+          return;
+        }
+      }
+
       const requestedTo = typeof req.body?.to === 'string' ? req.body.to.trim() : '';
       const targetTo = requestedTo || req.authUser?.email || '';
       if (!targetTo || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetTo)) {
@@ -2733,9 +3235,10 @@ async function startServer() {
         fallbackUrl,
       });
     } catch (error) {
+      console.error('WhatsApp notification error:', error);
       res.status(500).json({
         sent: false,
-        error: error instanceof Error ? error.message : 'Failed to process WhatsApp reminder',
+        error: 'Failed to process WhatsApp reminder.',
       });
     }
   });
@@ -2753,6 +3256,7 @@ async function startServer() {
         return;
       }
 
+      await enforceAndRecordAiQuota(req, 'smart_stocktake');
       const ai = getAiClient();
       const base64Clean = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
       const safeMime =
@@ -2847,6 +3351,7 @@ async function startServer() {
         return;
       }
 
+      await enforceAndRecordAiQuota(req, `tool_${action}`);
       const ai = getAiClient();
 
       if (action === 'parse_order') {
@@ -3144,6 +3649,470 @@ async function startServer() {
     } catch (error) {
       const formatted = formatAiError(error);
       res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+
+  function isUnsafeTargetHost(hostname: string): boolean {
+    const h = hostname.trim().toLowerCase();
+    if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local')) {
+      return true;
+    }
+    if (h === '::1' || h === '[::1]' || h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd')) {
+      return true;
+    }
+    const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4) {
+      const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+      if (
+        a === 0 ||
+        a === 10 ||
+        a === 127 ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 12. Live URA EFRIS Fiscalization Proxy (System-to-System T109 or Compliant URA Sandbox Fiscalizer)
+  app.post('/api/efris/fiscalize', requireFirebaseAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const {
+        reference = '',
+        tin = '',
+        businessName = 'Merchant',
+        branchName = 'Main Branch',
+        buyerName = 'Walk-in Customer',
+        buyerTin = '',
+        items = [],
+        subtotal = 0,
+        taxAmount = 0,
+        total = 0,
+        paymentMethod = 'Cash',
+        deviceNo = '',
+        sandbox = true,
+        isCreditNote = false,
+      } = req.body || {};
+
+      const cleanRef = String(reference || '').trim() || `INV-${Date.now()}`;
+      const cleanTin = String(tin || process.env.EFRIS_TIN || '').trim();
+      const cleanDevice = String(deviceNo || process.env.EFRIS_DEVICE_NO || 'EFRIS-DEV-001').trim();
+      const liveUrl = process.env.EFRIS_API_URL?.trim();
+
+      if (!sandbox && liveUrl) {
+        let parsedLiveUrl: URL;
+        try {
+          parsedLiveUrl = new URL(liveUrl);
+        } catch {
+          res.status(502).json({ error: 'Configured EFRIS_API_URL is invalid.' });
+          return;
+        }
+        if (parsedLiveUrl.protocol !== 'https:' || isUnsafeTargetHost(parsedLiveUrl.hostname)) {
+          res.status(502).json({ error: 'Configured EFRIS_API_URL must use a public HTTPS endpoint.' });
+          return;
+        }
+
+        const upstreamRes = await fetch(parsedLiveUrl.toString(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            interfaceCode: isCreditNote ? 'T110' : 'T109',
+            tin: cleanTin,
+            deviceNo: cleanDevice,
+            reference: cleanRef,
+            sellerName: businessName,
+            branchName,
+            buyerName,
+            buyerTin,
+            paymentMethod,
+            items,
+            subtotal: Math.round(Number(subtotal) || 0),
+            taxAmount: Math.round(Number(taxAmount) || 0),
+            total: Math.round(Number(total) || 0),
+          }),
+        });
+        const upstreamJson = (await upstreamRes.json().catch(() => ({}))) as {
+          fdn?: string;
+          verificationCode?: string;
+          qrCode?: string;
+          error?: string;
+        };
+        if (!upstreamRes.ok || !upstreamJson.fdn) {
+          res.status(502).json({
+            error: upstreamJson.error || 'URA EFRIS middleware returned an error during fiscalization.',
+          });
+          return;
+        }
+        res.json({
+          efrisFdn: upstreamJson.fdn,
+          efrisVerificationCode: upstreamJson.verificationCode || '',
+          efrisQrData:
+            upstreamJson.qrCode ||
+            `https://efris.ura.go.ug/verify?fdn=${encodeURIComponent(upstreamJson.fdn)}&antifake=${encodeURIComponent(
+              upstreamJson.verificationCode || ''
+            )}&tin=${encodeURIComponent(cleanTin)}`,
+          efrisFiscalizedAt: new Date().toISOString(),
+          efrisStatus: 'fiscalized',
+        });
+        return;
+      }
+
+      // Compliant Sandbox Cryptographic FDN Envelope using invoice digest
+      const digest = crypto
+        .createHash('sha256')
+        .update(`${cleanTin}|${cleanDevice}|${cleanRef}|${total}|${new Date().toISOString().slice(0, 10)}`)
+        .digest('hex');
+      const numericPart = String(BigInt('0x' + digest.slice(0, 14))).slice(0, 11).padStart(11, '0');
+      const efrisFdn = `${isCreditNote ? '9' : '3'}${numericPart}`;
+      const efrisVerificationCode = String(BigInt('0x' + digest.slice(14, 34))).slice(0, 20).padStart(20, '0');
+      const efrisQrData = `https://efris.ura.go.ug/verify?fdn=${efrisFdn}&antifake=${efrisVerificationCode}&tin=${encodeURIComponent(
+        cleanTin || 'SANDBOX'
+      )}&mode=sandbox`;
+
+      res.json({
+        efrisFdn,
+        efrisVerificationCode,
+        efrisQrData,
+        efrisFiscalizedAt: new Date().toISOString(),
+        efrisStatus: 'sandbox',
+      });
+    } catch (error) {
+      console.error('EFRIS fiscalization error:', error);
+      res.status(500).json({
+        error: 'EFRIS fiscalization failed.',
+      });
+    }
+  });
+
+  // 13. Automated Subscription & Trial Expiry Sweep Endpoint (Master Admin token OR x-cron-secret)
+  app.post('/api/cron/subscription-sweep', async (req: Request, res: Response) => {
+    try {
+      const configuredCronSecret = process.env.CRON_SECRET?.trim();
+      const incomingSecret = String(req.headers['x-cron-secret'] || '').trim();
+      const authHeader = String(req.headers.authorization || '').trim();
+      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+      let authorizedVia: 'master_token' | 'cron_secret' | null = null;
+
+      if (configuredCronSecret && incomingSecret && safeEqualsSecret(incomingSecret, configuredCronSecret)) {
+        authorizedVia = 'cron_secret';
+      } else if (bearerToken) {
+        try {
+          const decoded = await getAuth().verifyIdToken(bearerToken);
+          const email = String(decoded.email || '').toLowerCase();
+          if (decoded.email_verified && MASTER_OWNER_EMAILS.has(email)) {
+            authorizedVia = 'master_token';
+          } else {
+            const masterDoc = await firestoreRestGet(`masterAdmins/${decoded.uid}`, bearerToken);
+            if (masterDoc) authorizedVia = 'master_token';
+          }
+        } catch {
+          authorizedVia = null;
+        }
+      }
+
+      if (!authorizedVia) {
+        res.status(401).json({
+          error: 'Unauthorized. Provide a Master Admin Bearer token or valid x-cron-secret header.',
+        });
+        return;
+      }
+
+      let firestoreToken = bearerToken;
+      if (!firestoreToken && authorizedVia === 'cron_secret') {
+        try {
+          const metaRes = await fetch(
+            'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+            { headers: { 'Metadata-Flavor': 'Google' } }
+          );
+          if (metaRes.ok) {
+            const metaJson = (await metaRes.json().catch(() => ({}))) as { access_token?: string };
+            if (metaJson.access_token) firestoreToken = metaJson.access_token;
+          }
+        } catch {
+          // Not running on GCP metadata network
+        }
+      }
+
+      if (!firestoreToken) {
+        res.status(503).json({
+          error:
+            'Unattended cron sweep requires Firestore IAM permissions on the Cloud Run service account or Master Admin Bearer authentication from the Platform Console.',
+        });
+        return;
+      }
+
+      const [plansDoc, tenants] = await Promise.all([
+        firestoreRestGet('platformConfig/plans', firestoreToken),
+        firestoreRestList('tenants', firestoreToken, 300),
+      ]);
+
+      const reminderLeadDays = Number(plansDoc?.reminderLeadDays ?? 5);
+      const autoLockExpired =
+        typeof plansDoc?.autoLockExpired === 'boolean' ? plansDoc.autoLockExpired : true;
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
+      const todayKey = nowIso.split('T')[0];
+      const emailCfg = getEmailProviderConfig();
+
+      let transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
+      if (emailCfg.configured && emailCfg.provider === 'smtp') {
+        transporter = nodemailer.createTransport({
+          host: emailCfg.smtpHost,
+          port: emailCfg.smtpPort,
+          secure: emailCfg.smtpSecure,
+          auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
+        });
+      }
+
+      const sendSweepEmail = async (
+        to: string,
+        subject: string,
+        text: string,
+        orgName: string,
+        headline: string,
+        expiryDateStr: string
+      ) => {
+        if (!emailCfg.configured || !to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return false;
+        const html = `
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;padding:24px;color:#0f172a;">
+            <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+              <div style="background:#0B1F3A;padding:18px 22px;color:#ffffff;">
+                <div style="font-size:17px;font-weight:800;">PRIMESTOCK <span style="color:#00A86B;">BMS UG</span></div>
+                <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">${escapeHtmlText(orgName)}</div>
+              </div>
+              <div style="padding:22px;">
+                <h2 style="margin:0 0 10px 0;font-size:18px;color:#0B1F3A;">${escapeHtmlText(headline)}</h2>
+                <p style="margin:0 0 14px 0;font-size:14px;line-height:1.6;color:#334155;">${escapeHtmlText(text)}</p>
+                <div style="background:#f1f5f9;border-radius:10px;padding:12px 14px;font-size:12px;color:#334155;">
+                  <div><strong>Effective / Expiry Date:</strong> ${escapeHtmlText(expiryDateStr)}</div>
+                </div>
+              </div>
+              <div style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:12px 22px;font-size:11px;color:#64748b;text-align:center;">
+                Built &amp; managed by Novic Technologies
+              </div>
+            </div>
+          </div>
+        `.trim();
+
+        if (emailCfg.provider === 'resend') {
+          const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${emailCfg.resendApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ from: emailCfg.fromAddress, to: [to], subject, text, html }),
+          });
+          return r.ok;
+        }
+        if (transporter) {
+          await transporter.sendMail({ from: emailCfg.fromAddress, to, subject, text, html });
+          return true;
+        }
+        return false;
+      };
+
+      const writeSweepNotification = async (
+        tenantId: string,
+        title: string,
+        message: string,
+        severity: 'warning' | 'critical'
+      ) => {
+        const notifId = `cron_${todayKey}_${crypto.randomUUID().slice(0, 8)}`;
+        await firestoreRestPatch(
+          `tenants/${tenantId}/notifications/${notifId}`,
+          {
+            id: notifId,
+            tenantId,
+            title: title.slice(0, 150),
+            message: message.slice(0, 500),
+            category: 'billing',
+            severity,
+            read: false,
+            actionRoute: '/billing',
+            channel: 'email',
+            createdAt: nowIso,
+          },
+          firestoreToken
+        ).catch(() => false);
+      };
+
+      let checkedCount = 0;
+      let lockedCount = 0;
+      let remindedCount = 0;
+      let emailedCount = 0;
+      const details: Array<{ tenantId: string; name: string; action: string }> = [];
+
+      for (const org of tenants) {
+        const tenantId = String(org.id || org._docId || '');
+        if (
+          !tenantId ||
+          org.isComplimentary ||
+          org.autoRemindersEnabled === false ||
+          org.status === 'suspended' ||
+          org.status === 'pending_approval'
+        ) {
+          continue;
+        }
+        checkedCount++;
+
+        const endIso =
+          org.status === 'trial'
+            ? org.trialEndsAt
+            : org.subscriptionEndsAt || org.trialEndsAt;
+        if (!endIso) continue;
+
+        const endMs = new Date(endIso).getTime();
+        if (Number.isNaN(endMs)) continue;
+
+        const msRemaining = Math.max(0, endMs - now);
+        const daysRemaining = Math.ceil(msRemaining / (24 * 60 * 60 * 1000));
+        const lastReminderDate = String(org.lastAutoReminderAt || org.lastReminderAt || '').slice(0, 10);
+        const ownerEmail = String(org.ownerEmail || '').trim();
+        const orgName = String(org.name || 'Workspace');
+        const planName = String(org.plan || 'micro').toUpperCase();
+        const alreadyLocked = org.locked === true || org.status === 'locked';
+
+        if (endMs <= now) {
+          if (alreadyLocked) continue;
+
+          const expiryLabel = endIso.slice(0, 10);
+          if (autoLockExpired) {
+            const expiryMsg = `Your ${planName} ${
+              org.status === 'trial' ? 'trial' : 'subscription'
+            } for ${orgName} expired on ${expiryLabel}. Your workspace has been locked with all records safely preserved — renew in Billing to restore full access.`;
+
+            const patch: Record<string, unknown> = {
+              status: 'locked',
+              locked: true,
+              disabledReason: 'Subscription window expired — renew in Billing to unlock your workspace.',
+              lastReminderAt: nowIso,
+              lastReminderMessage: expiryMsg.slice(0, 500),
+              lastReminderChannel: 'email',
+              lastAutoReminderAt: nowIso,
+            };
+
+            const patchOk = await firestoreRestPatch(`tenants/${tenantId}`, patch, firestoreToken).catch(() => false);
+            if (patchOk) {
+              lockedCount++;
+            }
+            await writeSweepNotification(
+              tenantId,
+              'Subscription Expired — Workspace Locked',
+              expiryMsg,
+              'critical'
+            );
+
+            if (lastReminderDate !== todayKey) {
+              remindedCount++;
+              if (ownerEmail) {
+                const sent = await sendSweepEmail(
+                  ownerEmail,
+                  `Action Required: ${orgName} PrimeStock Workspace Locked`,
+                  expiryMsg,
+                  orgName,
+                  'Subscription Expired — Renewal Required',
+                  expiryLabel
+                ).catch(() => false);
+                if (sent) emailedCount++;
+              }
+            }
+            details.push({ tenantId, name: orgName, action: 'locked_expired' });
+          } else if (lastReminderDate !== todayKey) {
+            const overdueMsg = `Action Required: ${orgName}'s ${planName} ${
+              org.status === 'trial' ? 'trial' : 'subscription'
+            } expired on ${expiryLabel}. Renew in Billing via MTN MoMo or Airtel Money to keep uninterrupted access.`;
+
+            await firestoreRestPatch(
+              `tenants/${tenantId}`,
+              {
+                lastReminderAt: nowIso,
+                lastReminderMessage: overdueMsg.slice(0, 500),
+                lastReminderChannel: 'email',
+                lastAutoReminderAt: nowIso,
+              },
+              firestoreToken
+            ).catch(() => false);
+
+            await writeSweepNotification(
+              tenantId,
+              'Subscription Overdue — Renewal Required',
+              overdueMsg,
+              'critical'
+            );
+
+            remindedCount++;
+            if (ownerEmail) {
+              const sent = await sendSweepEmail(
+                ownerEmail,
+                `Overdue Renewal Alert: ${orgName} PrimeStock Plan`,
+                overdueMsg,
+                orgName,
+                'Subscription Overdue — Renewal Required',
+                expiryLabel
+              ).catch(() => false);
+              if (sent) emailedCount++;
+            }
+            details.push({ tenantId, name: orgName, action: 'reminded_overdue' });
+          }
+        } else if (daysRemaining <= reminderLeadDays && lastReminderDate !== todayKey) {
+          const expiryLabel = endIso.slice(0, 10);
+          const remindMsg = `Reminder: ${orgName}'s ${planName} plan expires in ${daysRemaining} day${
+            daysRemaining === 1 ? '' : 's'
+          } (${expiryLabel}). Renew early via MTN MoMo or Airtel Money in Billing to avoid checkout interruption.`;
+
+          await firestoreRestPatch(
+            `tenants/${tenantId}`,
+            {
+              lastReminderAt: nowIso,
+              lastReminderMessage: remindMsg.slice(0, 500),
+              lastReminderChannel: 'email',
+              lastAutoReminderAt: nowIso,
+            },
+            firestoreToken
+          ).catch(() => false);
+
+          await writeSweepNotification(
+            tenantId,
+            `Renewal Due in ${daysRemaining} Day${daysRemaining === 1 ? '' : 's'}`,
+            remindMsg,
+            'warning'
+          );
+
+          remindedCount++;
+          if (ownerEmail) {
+            const sent = await sendSweepEmail(
+              ownerEmail,
+              `Renewal Reminder: ${orgName} expires in ${daysRemaining} day(s)`,
+              remindMsg,
+              orgName,
+              `Subscription Renewal Due in ${daysRemaining} Day${daysRemaining === 1 ? '' : 's'}`,
+              expiryLabel
+            ).catch(() => false);
+            if (sent) emailedCount++;
+          }
+          details.push({ tenantId, name: orgName, action: `reminded_${daysRemaining}d` });
+        }
+      }
+
+      res.json({
+        ok: true,
+        authorizedVia,
+        checkedCount,
+        lockedCount,
+        remindedCount,
+        emailedCount,
+        details: details.slice(0, 50),
+      });
+    } catch (error) {
+      console.error('Automated expiry sweep failed:', error);
+      res.status(500).json({
+        error: 'Automated expiry sweep failed.',
+      });
     }
   });
 

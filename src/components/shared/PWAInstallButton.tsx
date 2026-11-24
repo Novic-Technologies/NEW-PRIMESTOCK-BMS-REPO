@@ -42,7 +42,7 @@ export function PWAInstallButton({
 
       {showIosGuide && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white text-primary rounded-2xl max-w-sm w-full p-5 shadow-xl border border-border">
+          <div className="bg-surface text-primary rounded-2xl max-w-sm w-full p-5 shadow-xl border border-border">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold text-base">Install PrimeStock on iOS</h3>
               <button

@@ -199,14 +199,17 @@ service cloud.firestore {
           'pendingTransactionId', 'pendingPayerPhone', 'pendingInvoiceId', 'pendingSubmittedAt',
           'approvedBy', 'approvedAt',
           'lastReminderAt', 'lastReminderMessage', 'lastReminderChannel',
+          'legalAcceptedAt', 'legalVersion',
           'createdAt', 'branding', 'preferences', 'billingPaymentMethods'
         ]) &&
         isValidId(data.id) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 150 &&
         data.plan in ['micro', 'starter', 'business', 'enterprise'] &&
-        data.status in ['active', 'suspended', 'trial', 'pending_approval'] &&
+        data.status in ['active', 'suspended', 'locked', 'trial', 'pending_approval'] &&
         data.trialEndsAt is string && data.trialEndsAt.size() > 0 && data.trialEndsAt.size() <= 64 &&
         data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('legalAcceptedAt' in data) || (data.legalAcceptedAt is string && data.legalAcceptedAt.size() <= 64)) &&
+        (!('legalVersion' in data) || (data.legalVersion is string && data.legalVersion.size() <= 32)) &&
         (!('tin' in data) || (data.tin is string && data.tin.size() <= 50)) &&
         (!('logo' in data) || (data.logo is string && data.logo.size() <= 60000)) &&
         (!('ownerEmail' in data) || (data.ownerEmail is string && data.ownerEmail.size() <= 254)) &&
@@ -235,7 +238,7 @@ service cloud.firestore {
         (!('lastReminderMessage' in data) || (data.lastReminderMessage is string && data.lastReminderMessage.size() <= 500)) &&
         (!('lastReminderChannel' in data) || (data.lastReminderChannel is string && data.lastReminderChannel.size() <= 40)) &&
         (!('branding' in data) || (data.branding is map && data.branding.keys().size() <= 15)) &&
-        (!('preferences' in data) || (data.preferences is map && data.preferences.keys().size() <= 25)) &&
+        (!('preferences' in data) || (data.preferences is map && data.preferences.keys().size() <= 35)) &&
         (!('billingPaymentMethods' in data) || (data.billingPaymentMethods is list && data.billingPaymentMethods.size() <= 10));
     }
 
@@ -254,7 +257,7 @@ service cloud.firestore {
 
     function isValidProduct(data, tenantId) {
       return data.keys().hasAll(['id', 'tenantId', 'name', 'sellingPrice', 'currentStock', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'tenantId', 'name', 'sku', 'barcode', 'categoryId', 'category', 'buyingPrice', 'sellingPrice', 'wholesalePrice', 'vipPrice', 'currentStock', 'branchStock', 'minStockLevel', 'unit', 'batchNumber', 'expiryDate', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'name', 'sku', 'barcode', 'categoryId', 'category', 'buyingPrice', 'sellingPrice', 'wholesalePrice', 'vipPrice', 'currentStock', 'branchStock', 'minStockLevel', 'unit', 'batchNumber', 'expiryDate', 'batches', 'status', 'createdAt']) &&
         isValidId(data.id) &&
         data.tenantId == tenantId &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 150 &&
@@ -273,12 +276,20 @@ service cloud.firestore {
         (!('unit' in data) || (data.unit is string && data.unit.size() <= 32)) &&
         (!('batchNumber' in data) || (data.batchNumber is string && data.batchNumber.size() <= 64)) &&
         (!('expiryDate' in data) || (data.expiryDate is string && data.expiryDate.size() <= 32)) &&
+        (!('batches' in data) || (data.batches is list && data.batches.size() <= 100)) &&
         (!('status' in data) || data.status in ['active', 'inactive']);
     }
 
     function isValidSale(data, tenantId) {
       return data.keys().hasAll(['id', 'tenantId', 'total', 'paymentMethod', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'branchName', 'shiftId', 'reference', 'customerId', 'userId', 'cashierId', 'cashierName', 'items', 'subtotal', 'discount', 'taxAmount', 'taxRate', 'total', 'paymentMethod', 'paymentProvider', 'paymentReference', 'payerPhone', 'cashTendered', 'changeGiven', 'splitPayments', 'status', 'refundedAt', 'refundReason', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'tenantId', 'branchId', 'branchName', 'shiftId', 'reference', 'customerId', 'userId', 'cashierId', 'cashierName',
+          'items', 'subtotal', 'discount', 'taxAmount', 'taxRate', 'total', 'paymentMethod', 'paymentProvider', 'paymentReference',
+          'payerPhone', 'cashTendered', 'changeGiven', 'splitPayments',
+          'loyaltyPointsEarned', 'loyaltyPointsRedeemed', 'loyaltyDiscountUgx',
+          'efrisFdn', 'efrisVerificationCode', 'efrisQrData', 'efrisFiscalizedAt', 'efrisStatus',
+          'status', 'refundedAt', 'refundReason', 'createdAt'
+        ]) &&
         isValidId(data.id) &&
         data.tenantId == tenantId &&
         data.total is number && data.total >= 0 &&
@@ -299,6 +310,14 @@ service cloud.firestore {
         (!('reference' in data) || (data.reference is string && data.reference.size() <= 64)) &&
         (!('items' in data) || (data.items is list && data.items.size() <= 200)) &&
         (!('splitPayments' in data) || (data.splitPayments is list && data.splitPayments.size() <= 10)) &&
+        (!('loyaltyPointsEarned' in data) || (data.loyaltyPointsEarned is number && data.loyaltyPointsEarned >= 0)) &&
+        (!('loyaltyPointsRedeemed' in data) || (data.loyaltyPointsRedeemed is number && data.loyaltyPointsRedeemed >= 0)) &&
+        (!('loyaltyDiscountUgx' in data) || (data.loyaltyDiscountUgx is number && data.loyaltyDiscountUgx >= 0)) &&
+        (!('efrisFdn' in data) || (data.efrisFdn is string && data.efrisFdn.size() <= 64)) &&
+        (!('efrisVerificationCode' in data) || (data.efrisVerificationCode is string && data.efrisVerificationCode.size() <= 64)) &&
+        (!('efrisQrData' in data) || (data.efrisQrData is string && data.efrisQrData.size() <= 600)) &&
+        (!('efrisFiscalizedAt' in data) || (data.efrisFiscalizedAt is string && data.efrisFiscalizedAt.size() <= 64)) &&
+        (!('efrisStatus' in data) || data.efrisStatus in ['fiscalized', 'sandbox', 'pending', 'failed']) &&
         (!('subtotal' in data) || (data.subtotal is number && data.subtotal >= 0)) &&
         (!('discount' in data) || (data.discount is number && data.discount >= 0)) &&
         (!('taxAmount' in data) || (data.taxAmount is number && data.taxAmount >= 0)) &&
@@ -333,20 +352,28 @@ service cloud.firestore {
 
     function isValidPurchaseOrder(data, tenantId) {
       return data.keys().hasAll(['id', 'tenantId', 'reference', 'supplierId', 'supplierName', 'items', 'totalAmount', 'paidAmount', 'status', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'tenantId', 'branchId', 'reference', 'supplierId', 'supplierName', 'items', 'totalAmount', 'paidAmount', 'status', 'expectedDate', 'receivedAt', 'notes', 'createdBy', 'createdAt']) &&
+        data.keys().hasOnly([
+          'id', 'tenantId', 'branchId', 'reference', 'supplierId', 'supplierName',
+          'currency', 'exchangeRateToUgx', 'foreignTotalAmount',
+          'items', 'totalAmount', 'paidAmount', 'status', 'expectedDate', 'receivedAt', 'grnHistory', 'notes', 'createdBy', 'createdAt'
+        ]) &&
         isValidId(data.id) &&
         data.tenantId == tenantId &&
         data.reference is string && data.reference.size() >= 1 && data.reference.size() <= 64 &&
         isValidId(data.supplierId) &&
         data.supplierName is string && data.supplierName.size() >= 1 && data.supplierName.size() <= 150 &&
+        (!('currency' in data) || data.currency in ['UGX', 'USD', 'KES']) &&
+        (!('exchangeRateToUgx' in data) || (data.exchangeRateToUgx is number && data.exchangeRateToUgx > 0)) &&
+        (!('foreignTotalAmount' in data) || (data.foreignTotalAmount is number && data.foreignTotalAmount >= 0)) &&
         data.items is list && data.items.size() > 0 && data.items.size() <= 200 &&
         data.totalAmount is number && data.totalAmount >= 0 &&
         data.paidAmount is number && data.paidAmount >= 0 &&
-        data.status in ['ordered', 'received', 'cancelled'] &&
+        data.status in ['ordered', 'partially_received', 'received', 'cancelled'] &&
         data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
         (!('branchId' in data) || (data.branchId is string && data.branchId.size() <= 128)) &&
         (!('expectedDate' in data) || (data.expectedDate is string && data.expectedDate.size() <= 64)) &&
         (!('receivedAt' in data) || (data.receivedAt is string && data.receivedAt.size() <= 64)) &&
+        (!('grnHistory' in data) || (data.grnHistory is list && data.grnHistory.size() <= 50)) &&
         (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
         (!('createdBy' in data) || isValidId(data.createdBy));
     }
@@ -465,7 +492,7 @@ service cloud.firestore {
 
     function isValidStockTransfer(data, tenantId) {
       return data.keys().hasAll(['id', 'tenantId', 'productId', 'productName', 'fromBranchId', 'fromBranchName', 'toBranchId', 'toBranchName', 'quantity', 'status', 'transferredBy', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'tenantId', 'productId', 'productName', 'fromBranchId', 'fromBranchName', 'toBranchId', 'toBranchName', 'quantity', 'notes', 'status', 'transferredBy', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'productId', 'productName', 'fromBranchId', 'fromBranchName', 'toBranchId', 'toBranchName', 'quantity', 'notes', 'status', 'transferredBy', 'dispatchedAt', 'receivedAt', 'receivedBy', 'receivedByName', 'createdAt']) &&
         isValidId(data.id) &&
         data.tenantId == tenantId &&
         isValidId(data.productId) &&
@@ -476,9 +503,13 @@ service cloud.firestore {
         data.fromBranchName is string && data.fromBranchName.size() <= 120 &&
         data.toBranchName is string && data.toBranchName.size() <= 120 &&
         data.quantity is number && data.quantity > 0 &&
-        data.status == 'completed' &&
+        data.status in ['in_transit', 'completed', 'cancelled'] &&
         isValidId(data.transferredBy) &&
         data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('dispatchedAt' in data) || (data.dispatchedAt is string && data.dispatchedAt.size() <= 64)) &&
+        (!('receivedAt' in data) || (data.receivedAt is string && data.receivedAt.size() <= 64)) &&
+        (!('receivedBy' in data) || isValidId(data.receivedBy)) &&
+        (!('receivedByName' in data) || (data.receivedByName is string && data.receivedByName.size() <= 120)) &&
         (!('notes' in data) || (data.notes is string && data.notes.size() <= 300));
     }
 
@@ -544,6 +575,18 @@ service cloud.firestore {
         data.role in ['user', 'assistant'] &&
         data.text is string && data.text.size() >= 1 && data.text.size() <= 8000 &&
         data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64;
+    }
+
+    function isValidAIUsage(data, tenantId, dateKey) {
+      return data.keys().hasAll(['id', 'tenantId', 'dateKey', 'count', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'dateKey', 'count', 'lastAction', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.id == dateKey &&
+        data.tenantId == tenantId &&
+        data.dateKey is string && data.dateKey.size() == 10 && data.dateKey == dateKey &&
+        data.count is number && data.count >= 0 && data.count <= 5000 &&
+        (!('lastAction' in data) || (data.lastAction is string && data.lastAction.size() <= 64)) &&
+        data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64;
     }
 
     function isValidPlatformBillingConfig(data, configId) {
@@ -735,10 +778,11 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         (
           isMasterAdmin() ||
-          (isTenantAdmin(tenantId) &&
+           (isTenantAdmin(tenantId) &&
            incoming().diff(existing()).affectedKeys().hasOnly([
              'name', 'logo', 'tin', 'ownerEmail', 'ownerName', 'ownerPhone',
              'branding', 'preferences', 'billingPaymentMethods',
+             'legalAcceptedAt', 'legalVersion',
              'status', 'pendingPlan', 'pendingAmountUgx', 'pendingPaymentMethod',
              'pendingPaymentRef', 'pendingTransactionId', 'pendingPayerPhone',
              'pendingInvoiceId', 'pendingSubmittedAt',
@@ -818,7 +862,7 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt &&
           (
             canManageInventory(tenantId) ||
-            (belongsToTenant(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['currentStock', 'branchStock']))
+            (belongsToTenant(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['currentStock', 'branchStock', 'batches']))
           );
         allow delete: if isValidId(productId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
@@ -833,12 +877,18 @@ service cloud.firestore {
           incoming().id == saleId &&
           (!('userId' in incoming()) || incoming().userId == request.auth.uid);
         allow update: if isValidId(saleId) &&
-          isTenantManagerOrAdmin(tenantId) &&
           tenantNotSuspended(tenantId) &&
           isValidSale(incoming(), tenantId) &&
           incoming().id == existing().id &&
           incoming().tenantId == existing().tenantId &&
-          incoming().createdAt == existing().createdAt;
+          incoming().createdAt == existing().createdAt &&
+          (
+            isTenantManagerOrAdmin(tenantId) ||
+            (belongsToTenant(tenantId) &&
+             incoming().diff(existing()).affectedKeys().hasOnly([
+               'efrisFdn', 'efrisVerificationCode', 'efrisQrData', 'efrisFiscalizedAt', 'efrisStatus'
+             ]))
+          );
         allow delete: if isValidId(saleId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
@@ -1017,6 +1067,24 @@ service cloud.firestore {
           isValidStockTransfer(incoming(), tenantId) &&
           incoming().id == transferId &&
           incoming().transferredBy == request.auth.uid;
+        allow update: if isValidId(transferId) &&
+          isValidStockTransfer(incoming(), tenantId) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().productId == existing().productId &&
+          incoming().fromBranchId == existing().fromBranchId &&
+          incoming().toBranchId == existing().toBranchId &&
+          incoming().quantity == existing().quantity &&
+          incoming().transferredBy == existing().transferredBy &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isMasterAdmin() ||
+            (canManageInventory(tenantId) &&
+             tenantNotSuspended(tenantId) &&
+             existing().status == 'in_transit' &&
+             incoming().status in ['completed', 'cancelled'] &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'receivedAt', 'receivedBy', 'receivedByName', 'notes']))
+          );
         allow delete: if isValidId(transferId) && (isMasterAdmin() || isTenantAdmin(tenantId));
       }
 
@@ -1066,6 +1134,26 @@ service cloud.firestore {
           incoming().userId == request.auth.uid;
         allow delete: if isValidId(chatId) &&
           (isMasterAdmin() || (belongsToTenant(tenantId) && (existing().userId == request.auth.uid || isTenantAdmin(tenantId))));
+      }
+
+      match /aiUsage/{dateKey} {
+        allow get: if isValidId(dateKey) && (belongsToTenant(tenantId) || isMasterAdmin());
+        allow list: if belongsToTenant(tenantId) || isMasterAdmin();
+        allow create: if isValidId(dateKey) &&
+          belongsToTenant(tenantId) &&
+          isValidAIUsage(incoming(), tenantId, dateKey);
+        allow update: if isValidId(dateKey) &&
+          isValidAIUsage(incoming(), tenantId, dateKey) &&
+          incoming().id == existing().id &&
+          incoming().tenantId == existing().tenantId &&
+          incoming().dateKey == existing().dateKey &&
+          incoming().count >= existing().count &&
+          (
+            isMasterAdmin() ||
+            (belongsToTenant(tenantId) &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['count', 'lastAction', 'updatedAt']))
+          );
+        allow delete: if isMasterAdmin();
       }
     }
 

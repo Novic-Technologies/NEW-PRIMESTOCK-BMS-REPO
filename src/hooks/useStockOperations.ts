@@ -195,14 +195,13 @@ export function useStockOperations() {
     const fromBranch = allBranches.find((b) => b.id === params.fromBranchId);
     const toBranch = allBranches.find((b) => b.id === params.toBranchId);
 
+    const nowIso = new Date().toISOString();
     const afterOut = applyBranchStockDelta(product, params.fromBranchId, -qty, branchIds);
-    const midProduct = { ...product, ...afterOut };
-    const afterIn = applyBranchStockDelta(midProduct, params.toBranchId, qty, branchIds);
 
     const updatedProduct = stripUndefined({
       ...product,
-      currentStock: afterIn.currentStock,
-      branchStock: afterIn.branchStock,
+      currentStock: afterOut.currentStock,
+      branchStock: afterOut.branchStock,
     });
 
     const transfer: StockTransfer = stripUndefined({
@@ -216,9 +215,10 @@ export function useStockOperations() {
       toBranchName: toBranch?.name || 'Destination Branch',
       quantity: qty,
       notes: params.notes?.trim() || undefined,
-      status: 'completed',
+      status: 'in_transit',
       transferredBy: user.uid,
-      createdAt: new Date().toISOString(),
+      dispatchedAt: nowIso,
+      createdAt: nowIso,
     });
 
     await Promise.all([
@@ -232,14 +232,122 @@ export function useStockOperations() {
       actorId: user.uid,
       actorName: user.name,
       actorRole: user.role,
-      action: 'STOCK_TRANSFERRED',
+      action: 'STOCK_TRANSFER_DISPATCHED',
       entityType: 'stockTransfer',
       entityId: transfer.id,
-      summary: `Transferred ${qty} ${product.unit} of ${product.name} from ${transfer.fromBranchName} to ${transfer.toBranchName}`,
+      summary: `Dispatched ${qty} ${product.unit} of ${product.name} from ${transfer.fromBranchName} to ${transfer.toBranchName} (In Transit)`,
     });
 
-    toast.success(`Transferred ${qty} ${product.unit} to ${transfer.toBranchName}`);
+    toast.success(`Dispatched ${qty} ${product.unit} to ${transfer.toBranchName} (In Transit)`);
     return transfer;
+  };
+
+  const confirmTransferReceipt = async (transferId: string) => {
+    if (!tenant || !user) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!canManageInventoryData(user)) {
+      toast.error('Only inventory staff, managers, or admins can confirm incoming transfers');
+      return;
+    }
+
+    const transfer = await localDb.stockTransfers.get(transferId);
+    if (!transfer || transfer.status !== 'in_transit') return;
+
+    const product = await localDb.products.get(transfer.productId);
+    if (!product) {
+      toast.error('Product record not found');
+      return;
+    }
+
+    const allBranches = await localDb.branches.where('tenantId').equals(tenant.id).toArray();
+    const branchIds = allBranches.map((b) => b.id);
+    const afterIn = applyBranchStockDelta(product, transfer.toBranchId, transfer.quantity, branchIds);
+    const nowIso = new Date().toISOString();
+
+    const updatedProduct = stripUndefined({
+      ...product,
+      currentStock: afterIn.currentStock,
+      branchStock: afterIn.branchStock,
+    });
+
+    const completedTransfer: StockTransfer = stripUndefined({
+      ...transfer,
+      status: 'completed',
+      receivedAt: nowIso,
+      receivedBy: user.uid,
+      receivedByName: user.name,
+    });
+
+    await Promise.all([
+      persistRecord('products', 'update', updatedProduct),
+      persistRecord('stockTransfers', 'update', completedTransfer),
+    ]);
+
+    void logWorkspaceAudit({
+      tenantId: tenant.id,
+      branchId: transfer.toBranchId,
+      actorId: user.uid,
+      actorName: user.name,
+      actorRole: user.role,
+      action: 'STOCK_TRANSFER_RECEIVED',
+      entityType: 'stockTransfer',
+      entityId: transfer.id,
+      summary: `Confirmed receipt of ${transfer.quantity} ${product.unit} (${transfer.productName}) at ${transfer.toBranchName}`,
+    });
+
+    toast.success(`Confirmed receipt of ${transfer.quantity} ${product.unit} at ${transfer.toBranchName}`);
+    return completedTransfer;
+  };
+
+  const cancelInTransitTransfer = async (transferId: string) => {
+    if (!tenant || !user) return;
+    if (!canManageInventoryData(user)) {
+      toast.error('Only inventory staff, managers, or admins can cancel transfers');
+      return;
+    }
+
+    const transfer = await localDb.stockTransfers.get(transferId);
+    if (!transfer || transfer.status !== 'in_transit') return;
+
+    const product = await localDb.products.get(transfer.productId);
+    if (product) {
+      const allBranches = await localDb.branches.where('tenantId').equals(tenant.id).toArray();
+      const branchIds = allBranches.map((b) => b.id);
+      const restored = applyBranchStockDelta(product, transfer.fromBranchId, transfer.quantity, branchIds);
+      await persistRecord(
+        'products',
+        'update',
+        stripUndefined({
+          ...product,
+          currentStock: restored.currentStock,
+          branchStock: restored.branchStock,
+        })
+      );
+    }
+
+    const cancelled: StockTransfer = stripUndefined({
+      ...transfer,
+      status: 'cancelled',
+    });
+    await persistRecord('stockTransfers', 'update', cancelled);
+
+    void logWorkspaceAudit({
+      tenantId: tenant.id,
+      branchId: transfer.fromBranchId,
+      actorId: user.uid,
+      actorName: user.name,
+      actorRole: user.role,
+      action: 'STOCK_TRANSFER_CANCELLED',
+      entityType: 'stockTransfer',
+      entityId: transfer.id,
+      summary: `Cancelled in-transit transfer of ${transfer.quantity} ${transfer.productName}; returned to ${transfer.fromBranchName}`,
+    });
+
+    toast.success(`Transfer cancelled; stock returned to ${transfer.fromBranchName}`);
+    return cancelled;
   };
 
   return {
@@ -247,5 +355,7 @@ export function useStockOperations() {
     adjustments,
     recordAdjustment,
     transferStock,
+    confirmTransferReceipt,
+    cancelInTransitTransfer,
   };
 }

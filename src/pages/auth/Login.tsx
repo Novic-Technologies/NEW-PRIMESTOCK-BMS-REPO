@@ -1,15 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Eye, EyeOff, AlertCircle, CheckCircle2, ArrowLeft, Loader2 } from 'lucide-react';
+import {
+  Eye,
+  EyeOff,
+  AlertCircle,
+  CheckCircle2,
+  ArrowLeft,
+  Loader2,
+  ShieldCheck,
+  FileText,
+  X,
+} from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useAuthStore } from '../../store/authStore';
 import { PrimeStockLogo } from '../../components/shared/PrimeStockLogo';
+import { ThemeToggleButton } from '../../components/shared/ThemeToggleButton';
 import { getDefaultRouteForUser } from '../../utils/rbac';
 import { getTrialDaysCount } from '../../utils/planLimits';
 
 type AuthMode = 'signin' | 'signup' | 'reset';
+type LegalDocType = 'terms' | 'privacy' | null;
 
 const REMEMBERED_EMAIL_KEY = 'primestock_remembered_email';
+const LEGAL_VERSION = '2026-11';
 
 function GoogleLogo() {
   return (
@@ -45,6 +58,9 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberEmail, setRememberEmail] = useState(false);
+  const [legalAccepted, setLegalAccepted] = useState(false);
+  const [legalError, setLegalError] = useState<string | null>(null);
+  const [activeLegalModal, setActiveLegalModal] = useState<LegalDocType>(null);
   const [resetSent, setResetSent] = useState(false);
   const [signupSuccessEmail, setSignupSuccessEmail] = useState<string | null>(null);
 
@@ -66,9 +82,26 @@ export default function Login() {
 
   const switchMode = (nextMode: AuthMode) => {
     clearAuthError();
+    setLegalError(null);
     setResetSent(false);
     setSignupSuccessEmail(null);
     setMode(nextMode);
+  };
+
+  const handleGoogleContinue = async () => {
+    setLegalError(null);
+    if (mode === 'signup') {
+      if (!legalAccepted) {
+        setLegalError('Please accept the Terms of Service and Privacy Policy before registering.');
+        return;
+      }
+      await loginWithGoogle({
+        legalAcceptedAt: new Date().toISOString(),
+        legalVersion: LEGAL_VERSION,
+      });
+      return;
+    }
+    await loginWithGoogle();
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -77,6 +110,7 @@ export default function Login() {
 
     setResetSent(false);
     setSignupSuccessEmail(null);
+    setLegalError(null);
 
     if (mode === 'signin') {
       try {
@@ -93,17 +127,24 @@ export default function Login() {
     }
 
     if (mode === 'signup') {
+      if (!legalAccepted) {
+        setLegalError('You must agree to the Terms of Service and Privacy Policy to create your business workspace.');
+        return;
+      }
       const result = await registerWithEmail({
         fullName,
         businessName,
         email,
         password,
+        legalAccepted: true,
+        legalVersion: LEGAL_VERSION,
       });
       if (result.ok) {
         setEmail(result.email || email.trim());
         setPassword('');
         setFullName('');
         setBusinessName('');
+        setLegalAccepted(false);
         setMode('signin');
         setSignupSuccessEmail(result.email || email.trim());
       }
@@ -134,9 +175,9 @@ export default function Login() {
       : 'Enter your account email and we will send you a password reset link.';
 
   return (
-    <div className="min-h-screen flex items-stretch bg-[#EDF1F6]">
+    <div className="min-h-screen flex items-stretch bg-canvas">
       {/* Left Panel - Branding */}
-      <div className="hidden lg:flex lg:w-1/2 bg-[#0B1F3A] p-12 flex-col justify-between relative overflow-hidden">
+      <div className="hidden lg:flex lg:w-1/2 bg-[#0B1F3A] border-r border-white/10 p-12 flex-col justify-between relative overflow-hidden">
         <div className="relative z-10">
           <div className="mb-12">
             <PrimeStockLogo variant="light" size="lg" showTagline />
@@ -150,26 +191,33 @@ export default function Login() {
           </p>
         </div>
 
-        <div className="relative z-10">
+        <div className="relative z-10 space-y-2">
           <div className="flex items-center gap-3 text-slate-300/75 text-sm">
             <span>Offline-First</span>
             <span aria-hidden="true">·</span>
             <span>Multi-Tenant</span>
             <span aria-hidden="true">·</span>
-            <span>URA Compliant</span>
+            <span>URA EFRIS Ready</span>
           </div>
+          <p className="text-xs text-slate-400">
+            Protected under the Uganda Data Protection and Privacy Act, 2019.
+          </p>
         </div>
 
-        {/* Restrained architectural ambient highlights */}
         <div className="absolute top-[-10%] right-[-10%] w-[55%] h-[55%] bg-white/[0.04] rounded-full blur-3xl pointer-events-none" />
         <div className="absolute bottom-[-20%] left-[-10%] w-[70%] h-[70%] bg-[#0F766E]/15 rounded-full blur-3xl pointer-events-none" />
       </div>
 
       {/* Right Panel - Auth Form */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center p-4 sm:p-8 lg:p-12 bg-[#EDF1F6]">
-        <div className="max-w-md w-full bg-[#FBFDFF] border border-border rounded-2xl p-5 sm:p-8 shadow-soft">
-          <div className="lg:hidden mb-8">
-            <PrimeStockLogo variant="dark" size="md" showTagline />
+      <div className="w-full lg:w-1/2 flex items-center justify-center p-4 sm:p-8 lg:p-12 bg-canvas">
+        <div className="max-w-md w-full bg-surface border border-border rounded-2xl p-5 sm:p-8 shadow-soft">
+          <div className="flex items-center justify-between gap-2 mb-6 lg:mb-4">
+            <div className="lg:hidden">
+              <PrimeStockLogo size="md" showTagline />
+            </div>
+            <div className="ml-auto">
+              <ThemeToggleButton compact />
+            </div>
           </div>
 
           {mode !== 'signin' && (
@@ -186,13 +234,13 @@ export default function Login() {
           <h2 className="text-2xl sm:text-3xl font-bold text-primary mb-2 text-balance">{headingText}</h2>
           <p className="text-text-secondary mb-6">{subtitleText}</p>
 
-          {authError && (
+          {(authError || legalError) && (
             <div
               role="alert"
-              className="mb-5 p-3.5 rounded-lg border border-danger/30 bg-danger/5 text-danger text-sm flex items-start gap-2.5"
+              className="mb-5 p-3.5 rounded-lg border border-danger/30 bg-danger/10 text-danger text-sm flex items-start gap-2.5"
             >
               <AlertCircle size={18} className="shrink-0 mt-0.5" />
-              <span>{authError}</span>
+              <span>{legalError || authError}</span>
             </div>
           )}
 
@@ -224,9 +272,9 @@ export default function Login() {
             <>
               <button
                 type="button"
-                onClick={loginWithGoogle}
+                onClick={handleGoogleContinue}
                 disabled={isBusy}
-                className="w-full flex items-center justify-center gap-3 py-3 px-4 border border-border rounded-lg font-bold text-primary hover:bg-surface-alt transition-all active:scale-[0.99] disabled:opacity-60 disabled:pointer-events-none min-h-[48px] whitespace-nowrap"
+                className="w-full flex items-center justify-center gap-3 py-3 px-4 border border-border bg-surface-alt/40 rounded-lg font-bold text-primary hover:bg-surface-alt transition-all active:scale-[0.99] disabled:opacity-60 disabled:pointer-events-none min-h-[48px] whitespace-nowrap"
               >
                 {isAuthenticating ? (
                   <Loader2 size={18} className="animate-spin shrink-0" />
@@ -241,7 +289,7 @@ export default function Login() {
                   <div className="w-full border-t border-border" />
                 </div>
                 <div className="relative flex justify-center text-sm">
-                  <span className="px-3 bg-[#FBFDFF] text-text-muted">Or use your credentials</span>
+                  <span className="px-3 bg-surface text-text-muted">Or use your credentials</span>
                 </div>
               </div>
             </>
@@ -364,6 +412,41 @@ export default function Login() {
               </div>
             )}
 
+            {mode === 'signup' && (
+              <div className="p-3 rounded-xl bg-surface-alt/70 border border-border">
+                <label className="flex items-start gap-2.5 text-xs text-text-secondary cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={legalAccepted}
+                    onChange={(e) => {
+                      setLegalAccepted(e.target.checked);
+                      if (e.target.checked) setLegalError(null);
+                    }}
+                    className="mt-0.5 rounded border-border text-accent focus:ring-accent shrink-0"
+                  />
+                  <span className="leading-relaxed">
+                    I agree to the{' '}
+                    <button
+                      type="button"
+                      onClick={() => setActiveLegalModal('terms')}
+                      className="font-bold text-accent hover:underline"
+                    >
+                      Terms of Service
+                    </button>{' '}
+                    and{' '}
+                    <button
+                      type="button"
+                      onClick={() => setActiveLegalModal('privacy')}
+                      className="font-bold text-accent hover:underline"
+                    >
+                      Privacy Policy
+                    </button>
+                    , and confirm authority to process my business, customer, and staff payroll records under Uganda&apos;s Data Protection and Privacy Act.
+                  </span>
+                </label>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={isBusy}
@@ -426,8 +509,156 @@ export default function Login() {
               </button>
             </p>
           )}
+
+          <div className="mt-6 pt-4 border-t border-border flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[11px] text-text-muted">
+            <button
+              type="button"
+              onClick={() => setActiveLegalModal('terms')}
+              className="hover:text-primary transition-colors"
+            >
+              Terms of Service
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={() => setActiveLegalModal('privacy')}
+              className="hover:text-primary transition-colors"
+            >
+              Privacy Policy
+            </button>
+            <span aria-hidden="true">·</span>
+            <a
+              href="/PrimeStock-BMS-System-Guide.pdf"
+              download="PrimeStock-BMS-System-Guide.pdf"
+              className="hover:text-accent font-semibold transition-colors"
+            >
+              System Guide (PDF)
+            </a>
+            <span aria-hidden="true">·</span>
+            <span>v{LEGAL_VERSION}</span>
+          </div>
         </div>
       </div>
+
+      {/* Terms of Service & Privacy Policy Modal */}
+      {activeLegalModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={activeLegalModal === 'terms' ? 'Terms of Service' : 'Privacy Policy'}
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div className="bg-surface border border-border rounded-2xl max-w-xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3 bg-surface-alt/60">
+              <div className="flex items-center gap-2.5">
+                {activeLegalModal === 'terms' ? (
+                  <FileText size={18} className="text-accent" />
+                ) : (
+                  <ShieldCheck size={18} className="text-accent" />
+                )}
+                <div>
+                  <h3 className="text-base font-bold text-primary">
+                    {activeLegalModal === 'terms'
+                      ? 'PrimeStock BMS Terms of Service'
+                      : 'PrimeStock BMS Privacy & Data Protection Policy'}
+                  </h3>
+                  <p className="text-[11px] text-text-muted">
+                    Effective Version {LEGAL_VERSION} · Republic of Uganda
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveLegalModal(null)}
+                aria-label="Close document"
+                className="p-1.5 rounded-lg text-text-muted hover:text-primary hover:bg-surface-alt"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 text-xs text-text-secondary leading-relaxed">
+              {activeLegalModal === 'terms' ? (
+                <>
+                  <p>
+                    <strong className="text-primary">1. Scope of Service:</strong> PrimeStock BMS
+                    (operated by Novic Technologies) provides multi-tenant inventory, point-of-sale,
+                    accounting, payroll, and URA EFRIS readiness software for merchants in Uganda
+                    and East Africa.
+                  </p>
+                  <p>
+                    <strong className="text-primary">2. Merchant Ownership &amp; Responsibility:</strong>{' '}
+                    You retain full legal ownership of your sales, customer, supplier, and employee
+                    records. You are responsible for verifying statutory tax filings (URA VAT, PAYE,
+                    NSSF, and EFRIS fiscalization codes) prior to official submission.
+                  </p>
+                  <p>
+                    <strong className="text-primary">3. Subscriptions, Trials &amp; Overdue Lock:</strong>{' '}
+                    Workspaces begin with a free trial period. Upon expiry without an active plan
+                    renewal, write access is automatically restricted while allowing read/export of
+                    your existing business data.
+                  </p>
+                  <p>
+                    <strong className="text-primary">4. AI Copilot &amp; Usage Quotas:</strong>{' '}
+                    AI-powered demand forecasts, document OCR, and natural-language queries operate
+                    within daily plan allowances enforced per workspace and provide advisory estimates.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    <strong className="text-primary">1. Compliance Framework:</strong> We process
+                    business, customer, and employee payroll information in alignment with the{' '}
+                    <strong>Uganda Data Protection and Privacy Act, 2019</strong>.
+                  </p>
+                  <p>
+                    <strong className="text-primary">2. Strict Tenant Isolation:</strong> Each
+                    business workspace resides in a logically isolated tenant partition secured by
+                    role-based access control and authenticated Firebase tokens. Staff members only
+                    access sections permitted by the workspace administrator.
+                  </p>
+                  <p>
+                    <strong className="text-primary">3. Offline Sync &amp; Local Storage:</strong>{' '}
+                    To guarantee uninterrupted POS operation during network outages, working records
+                    are cached locally in IndexedDB inside your browser and synced encrypted over
+                    HTTPS when connectivity returns.
+                  </p>
+                  <p>
+                    <strong className="text-primary">4. Retention &amp; Deletion:</strong> Workspace
+                    administrators may permanently erase their business account and all tenant
+                    subcollections at any time from Settings &rarr; Security &amp; Account Deletion.
+                  </p>
+                </>
+              )}
+            </div>
+
+            <div className="px-5 py-3.5 border-t border-border bg-surface-alt/40 flex items-center justify-between gap-3">
+              {mode === 'signup' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLegalAccepted(true);
+                    setLegalError(null);
+                    setActiveLegalModal(null);
+                  }}
+                  className="btn btn-primary text-xs py-2 px-4 ml-auto"
+                >
+                  Accept &amp; Continue Signup
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setActiveLegalModal(null)}
+                  className="btn btn-secondary text-xs py-2 px-4 ml-auto"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

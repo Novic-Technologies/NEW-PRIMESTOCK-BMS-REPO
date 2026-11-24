@@ -229,7 +229,7 @@ export function InspectorModalSkeleton() {
         {Array.from({ length: 4 }).map((_, idx) => (
           <div
             key={idx}
-            className="p-3.5 rounded-lg border border-[#D5DEE9] bg-[#F1F5F9] space-y-2"
+            className="p-3.5 rounded-lg border border-border bg-surface-alt space-y-2"
           >
             <Skeleton className="h-2.5 w-20" />
             <Skeleton className="h-5 w-16" />
@@ -237,13 +237,13 @@ export function InspectorModalSkeleton() {
         ))}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="p-4 rounded-xl border border-[#D5DEE9] space-y-3">
+        <div className="p-4 rounded-xl border border-border space-y-3">
           <Skeleton className="h-4 w-36" />
           <Skeleton className="h-3 w-full" />
           <Skeleton className="h-3 w-4/5" />
           <Skeleton className="h-3 w-3/4" />
         </div>
-        <div className="p-4 rounded-xl border border-[#D5DEE9] space-y-3">
+        <div className="p-4 rounded-xl border border-border space-y-3">
           <Skeleton className="h-4 w-36" />
           <Skeleton className="h-3 w-full" />
           <Skeleton className="h-3 w-5/6" />
@@ -441,7 +441,7 @@ export function PageContentSkeleton({
       {variant === 'master' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           {Array.from({ length: 5 }).map((_, idx) => (
-            <div key={idx} className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4 space-y-2">
+            <div key={idx} className="bg-surface border border-border rounded-xl p-4 space-y-2">
               <Skeleton className="h-3 w-24" />
               <Skeleton className="h-7 w-20" />
               <Skeleton className="h-3 w-28" />
@@ -472,7 +472,7 @@ export function PageContentSkeleton({
 
 export function WorkspaceBootSkeleton() {
   return (
-    <div className="flex min-h-screen bg-[#EDF1F6]" aria-busy="true" aria-label="Loading workspace">
+    <div className="flex min-h-screen bg-canvas" aria-busy="true" aria-label="Loading workspace">
       {/* Sidebar rail placeholder matching 256px desktop sidebar */}
       <aside className="hidden lg:flex w-64 bg-[#0B1F3A] flex-col shrink-0 border-r border-slate-800/70">
         <div className="px-5 py-4 border-b border-white/10 flex items-center gap-3">
@@ -498,7 +498,7 @@ export function WorkspaceBootSkeleton() {
 
       {/* Main viewport */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 bg-[#FBFDFF] border-b border-[#D5DEE9] px-4 md:px-8 flex items-center justify-between gap-4">
+        <header className="h-16 bg-surface border-b border-border px-4 md:px-8 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Skeleton className="w-9 h-9 rounded-lg lg:hidden" />
             <Skeleton className="h-9 w-40 rounded-lg" />

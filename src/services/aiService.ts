@@ -417,6 +417,75 @@ export async function runAiAssistantTool<T = Record<string, any>>(
   return data as T;
 }
 
+export async function fetchServerAiUsage(): Promise<{
+  dateKey: string;
+  count: number;
+  limit: number;
+  tenantId: string | null;
+}> {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/ai/usage', { method: 'GET', headers });
+  if (!res.ok) {
+    return { dateKey: new Date().toISOString().split('T')[0], count: 0, limit: -1, tenantId: null };
+  }
+  return res.json();
+}
+
+export async function fiscalizeEfrisReceipt(params: {
+  reference: string;
+  tin?: string;
+  businessName: string;
+  branchName?: string;
+  buyerName?: string;
+  buyerTin?: string;
+  items: Array<{ productName: string; quantity: number; price: number; subtotal: number }>;
+  subtotal: number;
+  taxAmount: number;
+  total: number;
+  paymentMethod: string;
+  deviceNo?: string;
+  sandbox?: boolean;
+  isCreditNote?: boolean;
+}): Promise<{
+  efrisFdn: string;
+  efrisVerificationCode: string;
+  efrisQrData: string;
+  efrisFiscalizedAt: string;
+  efrisStatus: 'fiscalized' | 'sandbox';
+}> {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/efris/fiscalize', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(params),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to fiscalize receipt with URA EFRIS');
+  }
+  return data;
+}
+
+export async function triggerServerExpirySweep(): Promise<{
+  ok: boolean;
+  checkedCount: number;
+  lockedCount: number;
+  remindedCount: number;
+  emailedCount: number;
+  details: Array<{ tenantId: string; name: string; action: string }>;
+}> {
+  const headers = await getAuthHeaders();
+  const res = await fetch('/api/cron/subscription-sweep', {
+    method: 'POST',
+    headers,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Server expiry sweep failed');
+  }
+  return data;
+}
+
 export type {
   ParsedOrderDraftResult,
   MomoMatchResult,
@@ -426,5 +495,6 @@ export type {
   GuidedSetupSuggestion,
   MasterTriageResult,
 };
+
 
 

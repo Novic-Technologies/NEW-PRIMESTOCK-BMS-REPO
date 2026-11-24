@@ -19,9 +19,11 @@ import {
   ArrowUpRight,
 } from 'lucide-react';
 import {
+  Product,
   SmartImportEntityType,
   SmartImportExtractResult,
   SmartImportFieldMapping,
+  SmartImportReconciledRow,
 } from '../../types';
 import {
   SMART_ENTITY_CONFIGS,
@@ -47,6 +49,15 @@ import { useCustomers } from '../../hooks/useCustomers';
 import { useSuppliers } from '../../hooks/useSuppliers';
 import { usePurchaseOrders } from '../../hooks/usePurchaseOrders';
 import { useExpenses } from '../../hooks/useExpenses';
+import {
+  ImportUndoSnapshot,
+  applyUpdatedProductsFromImport,
+  captureTenantIdSnapshot,
+  loadLastImportSnapshot,
+  reconcileSmartImportRows,
+  recordDiffImportSnapshot,
+  undoLastImportSnapshot,
+} from '../../utils/smartImportReconciler';
 import { downloadCsv } from '../../utils/exportCsv';
 import { cn } from '../../lib/utils';
 import toast from 'react-hot-toast';
@@ -76,11 +87,11 @@ interface ImportJobRecord {
 export default function BulkImport() {
   const { tenant, user } = useAuthStore();
   const { products, bulkImportProducts } = useInventory();
-  const { bulkImportSales, bulkImportRefunds } = usePOS();
+  const { sales, bulkImportSales, bulkImportRefunds } = usePOS();
   const { customers, bulkImportCustomers } = useCustomers();
   const { suppliers, bulkImportSuppliers } = useSuppliers();
-  const { bulkImportPurchaseOrders } = usePurchaseOrders();
-  const { bulkImportExpenses } = useExpenses();
+  const { purchaseOrders, bulkImportPurchaseOrders } = usePurchaseOrders();
+  const { expenses, bulkImportExpenses } = useExpenses();
 
   const [selectedTarget, setSelectedTarget] = useState<SmartImportEntityType | 'auto'>('auto');
   const [inputMode, setInputMode] = useState<'file' | 'paste'>('file');
@@ -89,18 +100,30 @@ export default function BulkImport() {
   const [isDragging, setIsDragging] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
+  const [isUndoing, setIsUndoing] = useState(false);
   const [extractError, setExtractError] = useState('');
 
   const [extractResult, setExtractResult] = useState<SmartImportExtractResult | null>(null);
+  const [activeTableIndex, setActiveTableIndex] = useState(0);
   const [activeEntity, setActiveEntity] = useState<SmartImportEntityType>('products');
   const [mappings, setMappings] = useState<SmartImportFieldMapping[]>([]);
   const [rows, setRows] = useState<Array<Record<string, any>>>([]);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [resolutions, setResolutions] = useState<
+    Record<number, 'overwrite' | 'keep_existing' | 'create_new'>
+  >({});
 
   const [deductStock, setDeductStock] = useState(false);
   const [restoreStock, setRestoreStock] = useState(false);
   const [markReceived, setMarkReceived] = useState(false);
   const [sessionJobs, setSessionJobs] = useState<ImportJobRecord[]>([]);
+  const [lastUndoSnapshot, setLastUndoSnapshot] = useState<ImportUndoSnapshot | null>(() =>
+    loadLastImportSnapshot(tenant?.id)
+  );
+
+  React.useEffect(() => {
+    setLastUndoSnapshot(loadLastImportSnapshot(tenant?.id));
+  }, [tenant?.id]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -193,9 +216,37 @@ export default function BulkImport() {
     });
   }, [rows, activeEntity, existingCustomerEmailSet, existingSupplierEmailSet]);
 
+  const reconciledRows: SmartImportReconciledRow[] = useMemo(() => {
+    const base = reconcileSmartImportRows(activeEntity, rows, {
+      products,
+      customers,
+      suppliers,
+      sales,
+      purchases: purchaseOrders,
+      expenses,
+    });
+    return base.map((item) => ({
+      ...item,
+      resolution: resolutions[item.rowIndex] || item.resolution,
+    }));
+  }, [activeEntity, rows, products, customers, suppliers, sales, purchaseOrders, expenses, resolutions]);
+
+  const activeSelectedIndices = useMemo(() => {
+    const kept: number[] = [];
+    rows.forEach((_, idx) => {
+      if (!selectedIndices.has(idx) || rowErrors[idx]) return;
+      const rec = reconciledRows[idx];
+      if (rec && rec.resolution === 'keep_existing' && rec.action !== 'create') {
+        return;
+      }
+      kept.push(idx);
+    });
+    return kept;
+  }, [rows, selectedIndices, rowErrors, reconciledRows]);
+
   const validSelectedRows = useMemo(
-    () => rows.filter((_, idx) => selectedIndices.has(idx) && !rowErrors[idx]),
-    [rows, selectedIndices, rowErrors]
+    () => activeSelectedIndices.map((idx) => rows[idx]),
+    [activeSelectedIndices, rows]
   );
 
   const invalidSelectedCount = useMemo(
@@ -213,8 +264,10 @@ export default function BulkImport() {
     setPastedText('');
     setExtractError('');
     setExtractResult(null);
+    setActiveTableIndex(0);
     setMappings([]);
     setRows([]);
+    setResolutions({});
     setSelectedIndices(new Set());
     setDeductStock(false);
     setRestoreStock(false);
@@ -223,11 +276,28 @@ export default function BulkImport() {
 
   const applyExtractToWorkbench = (result: SmartImportExtractResult) => {
     setExtractResult(result);
-    setActiveEntity(result.entityType);
-    setMappings(result.fieldMappings || []);
-    setRows(result.rows || []);
+    setActiveTableIndex(0);
+    setResolutions({});
+    const firstBatch = result.multiTables?.[0];
+    setActiveEntity(firstBatch?.entityType || result.entityType);
+    setMappings(firstBatch?.fieldMappings || result.fieldMappings || []);
+    const initialRows = firstBatch?.rows || result.rows || [];
+    setRows(initialRows);
     const allIdx = new Set<number>();
-    (result.rows || []).forEach((_, idx) => allIdx.add(idx));
+    initialRows.forEach((_, idx) => allIdx.add(idx));
+    setSelectedIndices(allIdx);
+  };
+
+  const handleSelectTableBatch = (index: number) => {
+    const batch = extractResult?.multiTables?.[index];
+    if (!batch) return;
+    setActiveTableIndex(index);
+    setResolutions({});
+    setActiveEntity(batch.entityType);
+    setMappings(batch.fieldMappings || []);
+    setRows(batch.rows || []);
+    const allIdx = new Set<number>();
+    (batch.rows || []).forEach((_, idx) => allIdx.add(idx));
     setSelectedIndices(allIdx);
   };
 
@@ -438,6 +508,22 @@ export default function BulkImport() {
     toast.success(`Downloaded ${cfg.sampleFilename}`);
   };
 
+  const handleUndoLastImport = async () => {
+    if (!tenant?.id || isUndoing) return;
+    setIsUndoing(true);
+    try {
+      const removed = await undoLastImportSnapshot(tenant.id);
+      setLastUndoSnapshot(loadLastImportSnapshot(tenant.id));
+      if (removed > 0) {
+        toast.success(`Reverted last import (${removed} record(s) removed)`);
+      } else {
+        toast('Nothing left to undo from the last import.');
+      }
+    } finally {
+      setIsUndoing(false);
+    }
+  };
+
   const handleCommitImport = async () => {
     if (!entityAccess[activeEntity]) {
       toast.error(
@@ -448,35 +534,81 @@ export default function BulkImport() {
       return;
     }
 
-    if (validSelectedRows.length === 0) {
-      toast.error('Select at least one valid row before importing.');
+    if (activeSelectedIndices.length === 0) {
+      toast.error('Select at least one non-skipped valid row before importing.');
       return;
     }
 
     setIsCommitting(true);
     try {
+      const productOverwrites: Array<{ existing: Product; incoming: Record<string, any> }> = [];
+      const rowsToCreate: Array<Record<string, any>> = [];
+      const productById = new Map<string, Product>(
+        products.map((p): [string, Product] => [p.id, p])
+      );
+
+      activeSelectedIndices.forEach((idx) => {
+        const rec = reconciledRows[idx];
+        const row = rows[idx];
+        if (
+          activeEntity === 'products' &&
+          rec?.resolution === 'overwrite' &&
+          rec.matchedRecordId &&
+          productById.has(rec.matchedRecordId)
+        ) {
+          productOverwrites.push({
+            existing: productById.get(rec.matchedRecordId)!,
+            incoming: row,
+          });
+        } else {
+          rowsToCreate.push(row);
+        }
+      });
+
+      const beforeSnapshot = tenant?.id ? await captureTenantIdSnapshot(tenant.id) : null;
       let count = 0;
       const sourceLabel = selectedFile
         ? `Bulk Import (${selectedFile.name})`
         : 'Bulk Import Studio';
 
-      if (activeEntity === 'products') {
-        count = await bulkImportProducts(validSelectedRows as any, sourceLabel);
-      } else if (activeEntity === 'sales') {
-        count = await bulkImportSales(validSelectedRows, { deductStock });
-      } else if (activeEntity === 'refunds') {
-        count = await bulkImportRefunds(validSelectedRows, { restoreStock });
-      } else if (activeEntity === 'customers') {
-        count = await bulkImportCustomers(validSelectedRows as any);
-      } else if (activeEntity === 'suppliers') {
-        count = await bulkImportSuppliers(validSelectedRows as any);
-      } else if (activeEntity === 'purchases') {
-        count = await bulkImportPurchaseOrders(validSelectedRows, { markReceived });
-      } else if (activeEntity === 'expenses') {
-        count = await bulkImportExpenses(validSelectedRows as any);
+      if (tenant?.id && productOverwrites.length > 0) {
+        const updatedCount = await applyUpdatedProductsFromImport(tenant.id, productOverwrites);
+        count += updatedCount;
+        if (updatedCount > 0) {
+          toast.success(`Updated ${updatedCount} existing product(s)`);
+        }
+      }
+
+      if (rowsToCreate.length > 0) {
+        let createdCount = 0;
+        if (activeEntity === 'products') {
+          createdCount = await bulkImportProducts(rowsToCreate as any, sourceLabel);
+        } else if (activeEntity === 'sales') {
+          createdCount = await bulkImportSales(rowsToCreate, { deductStock });
+        } else if (activeEntity === 'refunds') {
+          createdCount = await bulkImportRefunds(rowsToCreate, { restoreStock });
+        } else if (activeEntity === 'customers') {
+          createdCount = await bulkImportCustomers(rowsToCreate as any);
+        } else if (activeEntity === 'suppliers') {
+          createdCount = await bulkImportSuppliers(rowsToCreate as any);
+        } else if (activeEntity === 'purchases') {
+          createdCount = await bulkImportPurchaseOrders(rowsToCreate, { markReceived });
+        } else if (activeEntity === 'expenses') {
+          createdCount = await bulkImportExpenses(rowsToCreate as any);
+        }
+        count += createdCount;
       }
 
       if (count > 0) {
+        if (tenant?.id && beforeSnapshot) {
+          const snap = await recordDiffImportSnapshot(
+            tenant.id,
+            activeEntity,
+            selectedFile?.name || 'Bulk Import Studio',
+            beforeSnapshot
+          );
+          if (snap) setLastUndoSnapshot(snap);
+        }
         setSessionJobs((prev) => [
           {
             id: crypto.randomUUID(),
@@ -500,12 +632,23 @@ export default function BulkImport() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[#0F1E33] tracking-tight">Bulk Import Studio</h1>
-          <p className="text-sm text-[#475569] mt-0.5">
+          <h1 className="text-2xl font-bold text-primary tracking-tight">Bulk Import Studio</h1>
+          <p className="text-sm text-text-secondary mt-0.5">
             Upload spreadsheets, Word docs, PDFs, or receipt photos · AI auto-detects schema and maps columns to your database.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
+          {lastUndoSnapshot && (
+            <button
+              type="button"
+              disabled={isUndoing}
+              onClick={handleUndoLastImport}
+              className="btn btn-secondary text-xs gap-1.5 whitespace-nowrap shrink-0 text-danger border-danger/30 hover:bg-danger/5"
+            >
+              <RotateCcw size={15} />
+              {isUndoing ? 'Reverting...' : `Undo Last Import (${lastUndoSnapshot.label})`}
+            </button>
+          )}
           {extractResult && (
             <button
               type="button"
@@ -516,8 +659,8 @@ export default function BulkImport() {
               Start New Import
             </button>
           )}
-          <div className="text-xs text-[#475569] font-medium bg-[#FBFDFF] border border-[#D5DEE9] rounded-lg px-3 py-2 whitespace-nowrap">
-            Plan: <strong className="text-[#0F1E33]">{planQuota.name}</strong> ·{' '}
+          <div className="text-xs text-text-secondary font-medium bg-surface border border-border rounded-lg px-3 py-2 whitespace-nowrap">
+            Plan: <strong className="text-primary">{planQuota.name}</strong> ·{' '}
             <span className="font-mono tabular-nums">
               {products.length}/{Number.isFinite(planQuota.maxProducts) ? planQuota.maxProducts : '∞'}
             </span>{' '}
@@ -530,12 +673,12 @@ export default function BulkImport() {
       {!extractResult ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left: Target Schema Selector */}
-          <div className="lg:col-span-5 bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 space-y-4">
+          <div className="lg:col-span-5 bg-surface border border-border rounded-xl p-5 space-y-4">
             <div>
-              <h2 className="text-sm font-bold text-[#0F1E33] uppercase tracking-wider">
+              <h2 className="text-sm font-bold text-primary uppercase tracking-wider">
                 1. Target Schema
               </h2>
-              <p className="text-xs text-[#64748B] mt-1">
+              <p className="text-xs text-text-muted mt-1">
                 Let AI automatically classify the file, or lock a specific PrimeStock destination module.
               </p>
             </div>
@@ -546,28 +689,28 @@ export default function BulkImport() {
               className={cn(
                 'w-full text-left p-3.5 rounded-xl border transition-all flex items-start gap-3',
                 selectedTarget === 'auto'
-                  ? 'border-[#0F766E] bg-[#0F766E]/5'
-                  : 'border-[#E2E8F0] hover:border-[#CBD5E1] bg-white'
+                  ? 'border-accent bg-accent/5'
+                  : 'border-border hover:border-primary/40 bg-surface'
               )}
             >
               <div
                 className={cn(
                   'w-9 h-9 rounded-lg flex items-center justify-center shrink-0',
                   selectedTarget === 'auto'
-                    ? 'bg-[#0F766E] text-white'
-                    : 'bg-[#F1F5F9] text-[#475569]'
+                    ? 'bg-accent text-white'
+                    : 'bg-surface-alt text-text-secondary'
                 )}
               >
                 <Sparkles size={18} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-bold text-[#0F1E33]">Auto-Detect Schema (AI)</span>
+                  <span className="text-sm font-bold text-primary">Auto-Detect Schema (AI)</span>
                   {selectedTarget === 'auto' && (
-                    <span className="text-[11px] font-bold text-[#0F766E] whitespace-nowrap">Selected</span>
+                    <span className="text-[11px] font-bold text-accent whitespace-nowrap">Selected</span>
                   )}
                 </div>
-                <p className="text-xs text-[#64748B] mt-0.5">
+                <p className="text-xs text-text-muted mt-0.5">
                   Automatically identifies whether your file contains Products, Sales, Refunds, Customers, Suppliers, POs, or Expenses.
                 </p>
               </div>
@@ -585,8 +728,8 @@ export default function BulkImport() {
                     className={cn(
                       'rounded-lg border p-3 transition-all flex items-center justify-between gap-3',
                       isSelected
-                        ? 'border-[#0F1E33] bg-[#F8FAFC]'
-                        : 'border-[#E2E8F0] bg-white hover:border-[#CBD5E1]',
+                        ? 'border-primary bg-surface-alt'
+                        : 'border-border bg-surface hover:border-primary/40',
                       !permitted && 'opacity-65'
                     )}
                   >
@@ -606,15 +749,15 @@ export default function BulkImport() {
                       className="flex-1 text-left min-w-0"
                     >
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-[#0F1E33] truncate">{cfg.title}</span>
-                        {!permitted && <Lock size={12} className="text-[#94A3B8] shrink-0" />}
+                        <span className="text-xs font-bold text-primary truncate">{cfg.title}</span>
+                        {!permitted && <Lock size={12} className="text-text-muted shrink-0" />}
                       </div>
-                      <p className="text-[11px] text-[#64748B] truncate mt-0.5">{cfg.description}</p>
+                      <p className="text-[11px] text-text-muted truncate mt-0.5">{cfg.description}</p>
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDownloadTemplate(entity)}
-                      className="text-[11px] font-semibold text-[#475569] hover:text-[#0F1E33] px-2 py-1 rounded border border-[#E2E8F0] hover:bg-[#F8FAFC] flex items-center gap-1 shrink-0 whitespace-nowrap"
+                      className="text-[11px] font-semibold text-text-secondary hover:text-primary px-2 py-1 rounded border border-border hover:bg-surface-alt flex items-center gap-1 shrink-0 whitespace-nowrap"
                       title={`Download ${cfg.sampleFilename}`}
                     >
                       <Download size={12} />
@@ -627,16 +770,16 @@ export default function BulkImport() {
           </div>
 
           {/* Right: File Upload / Paste Input */}
-          <div className="lg:col-span-7 bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 flex flex-col justify-between space-y-5">
+          <div className="lg:col-span-7 bg-surface border border-border rounded-xl p-5 flex flex-col justify-between space-y-5">
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div>
-                  <h2 className="text-sm font-bold text-[#0F1E33] uppercase tracking-wider">
+                  <h2 className="text-sm font-bold text-primary uppercase tracking-wider">
                     2. Source Document or Dataset
                   </h2>
-                  <p className="text-xs text-[#64748B] mt-0.5">
+                  <p className="text-xs text-text-muted mt-0.5">
                     Target:{' '}
-                    <strong className="text-[#0F1E33]">
+                    <strong className="text-primary">
                       {selectedTarget === 'auto'
                         ? 'Auto-Detect with AI'
                         : SMART_ENTITY_CONFIGS[selectedTarget].title}
@@ -644,13 +787,13 @@ export default function BulkImport() {
                   </p>
                 </div>
 
-                <div className="inline-flex rounded-lg border border-[#E2E8F0] p-0.5 bg-[#F8FAFC]">
+                <div className="inline-flex rounded-lg border border-border p-0.5 bg-surface-alt">
                   <button
                     type="button"
                     onClick={() => setInputMode('file')}
                     className={cn(
                       'px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 whitespace-nowrap',
-                      inputMode === 'file' ? 'bg-white text-[#0F1E33] shadow-xs' : 'text-[#64748B]'
+                      inputMode === 'file' ? 'bg-surface text-primary shadow-xs' : 'text-text-muted'
                     )}
                   >
                     <Upload size={14} />
@@ -661,7 +804,7 @@ export default function BulkImport() {
                     onClick={() => setInputMode('paste')}
                     className={cn(
                       'px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 whitespace-nowrap',
-                      inputMode === 'paste' ? 'bg-white text-[#0F1E33] shadow-xs' : 'text-[#64748B]'
+                      inputMode === 'paste' ? 'bg-surface text-primary shadow-xs' : 'text-text-muted'
                     )}
                   >
                     <ClipboardPaste size={14} />
@@ -690,10 +833,10 @@ export default function BulkImport() {
                   className={cn(
                     'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all',
                     isDragging
-                      ? 'border-[#0F766E] bg-[#0F766E]/5'
+                      ? 'border-accent bg-accent/5'
                       : selectedFile
-                      ? 'border-[#0F766E]/50 bg-[#F8FAFC]'
-                      : 'border-[#CBD5E1] hover:border-[#94A3B8] hover:bg-[#F8FAFC]'
+                      ? 'border-accent/50 bg-surface-alt'
+                      : 'border-border hover:border-primary/40 hover:bg-surface-alt'
                   )}
                 >
                   <input
@@ -711,30 +854,30 @@ export default function BulkImport() {
                   />
                   {selectedFile ? (
                     <div className="space-y-2">
-                      <div className="w-11 h-11 rounded-xl bg-[#0F766E]/10 text-[#0F766E] flex items-center justify-center mx-auto">
+                      <div className="w-11 h-11 rounded-xl bg-accent/10 text-accent flex items-center justify-center mx-auto">
                         <FileSpreadsheet size={22} />
                       </div>
-                      <p className="text-sm font-bold text-[#0F1E33]">{selectedFile.name}</p>
-                      <p className="text-xs text-[#64748B] font-mono tabular-nums">
+                      <p className="text-sm font-bold text-primary">{selectedFile.name}</p>
+                      <p className="text-xs text-text-muted font-mono tabular-nums">
                         {(selectedFile.size / 1024).toFixed(1)} KB · Click to choose a different file
                       </p>
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      <div className="flex items-center justify-center gap-3 text-[#64748B]">
+                      <div className="flex items-center justify-center gap-3 text-text-muted">
                         <FileSpreadsheet size={24} />
                         <FileText size={24} />
                         <ImageIcon size={24} />
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-[#0F1E33]">
+                        <p className="text-sm font-bold text-primary">
                           Drop spreadsheet, document, PDF, or photo here
                         </p>
-                        <p className="text-xs text-[#64748B] mt-1">
+                        <p className="text-xs text-text-muted mt-1">
                           Supports Excel (.xlsx), CSV/TSV, Word (.docx), PDFs, JSON, and Camera/Receipt Images (AI OCR)
                         </p>
                       </div>
-                      <span className="inline-block text-xs font-semibold text-[#0F766E]">
+                      <span className="inline-block text-xs font-semibold text-accent">
                         Browse device files
                       </span>
                     </div>
@@ -751,14 +894,14 @@ export default function BulkImport() {
                     value={pastedText}
                     onChange={(e) => setPastedText(e.target.value)}
                   />
-                  <p className="text-[11px] text-[#64748B]">
+                  <p className="text-[11px] text-text-muted">
                     Structured CSV/TSV/JSON maps instantaneously without consuming AI calls; unstructured text uses Gemini AI extraction.
                   </p>
                 </div>
               )}
 
               {extractError && (
-                <div className="p-3 rounded-lg border border-red-200 bg-red-50 text-xs text-red-800 flex items-start justify-between gap-3">
+                <div className="p-3 rounded-lg border border-danger/30 bg-danger/10 text-xs text-danger flex items-start justify-between gap-3">
                   <div className="flex items-start gap-2">
                     <AlertTriangle size={15} className="shrink-0 mt-0.5" />
                     <span>{extractError}</span>
@@ -767,7 +910,7 @@ export default function BulkImport() {
                     type="button"
                     onClick={handleAnalyzeAndMap}
                     disabled={isExtracting}
-                    className="px-2.5 py-1 rounded border border-red-300 bg-white text-red-800 font-semibold hover:bg-red-100 whitespace-nowrap shrink-0"
+                    className="px-2.5 py-1 rounded border border-danger/40 bg-surface text-danger font-semibold hover:bg-danger/10 whitespace-nowrap shrink-0"
                   >
                     {isExtracting ? 'Retrying...' : 'Retry'}
                   </button>
@@ -775,8 +918,8 @@ export default function BulkImport() {
               )}
             </div>
 
-            <div className="pt-4 border-t border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="text-xs text-[#64748B]">
+            <div className="pt-4 border-t border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs text-text-muted">
                 Max 500 rows per batch · Quotas &amp; role rules enforced on commit
               </div>
               <button
@@ -796,28 +939,28 @@ export default function BulkImport() {
         /* Step 2: AI Field-Mapping Workbench & Validation Grid */
         <div className="space-y-6">
           {/* Detection & Target Schema Banner */}
-          <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="bg-surface border border-border rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#0F766E]">
+              <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-wider text-accent">
                 <Sparkles size={14} />
                 <span>{extractResult.detectedFormat}</span>
                 {extractResult.detectionConfidence && (
-                  <span className="text-[#475569]">
+                  <span className="text-text-secondary">
                     · {extractResult.detectionConfidence} confidence
                   </span>
                 )}
               </div>
-              <h2 className="text-lg font-bold text-[#0F1E33]">
+              <h2 className="text-lg font-bold text-primary">
                 Target Schema: {activeConfig.title}
               </h2>
-              <p className="text-xs text-[#64748B]">
+              <p className="text-xs text-text-muted">
                 {extractResult.detectionReason || extractResult.summary}
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#64748B] mb-1">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-text-muted mb-1">
                   Destination Collection
                 </label>
                 <select
@@ -844,18 +987,57 @@ export default function BulkImport() {
             </div>
           </div>
 
+          {/* Multi-Table PDF Tabs & Skipped Computed Summaries */}
+          {extractResult.multiTables && extractResult.multiTables.length > 1 && (
+            <div className="p-4 rounded-xl bg-surface border border-border space-y-2.5">
+              <p className="text-xs font-bold uppercase tracking-wider text-text-muted">
+                Extracted Document Tables ({extractResult.multiTables.length})
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {extractResult.multiTables.map((batch, idx) => (
+                  <button
+                    key={batch.tableId || idx}
+                    type="button"
+                    onClick={() => handleSelectTableBatch(idx)}
+                    className={cn(
+                      'px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap',
+                      activeTableIndex === idx
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-surface-alt text-primary border-border hover:border-accent'
+                    )}
+                  >
+                    {batch.sectionTitle || `Table ${idx + 1}`} · {SMART_ENTITY_CONFIGS[batch.entityType].title} ({batch.rows.length})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {extractResult.skippedTables && extractResult.skippedTables.length > 0 && (
+            <div className="p-3.5 rounded-xl bg-surface-alt border border-border text-xs text-text-secondary space-y-1">
+              <p className="font-bold text-primary">
+                Skipped {extractResult.skippedTables.length} Computed Summary Table(s)
+              </p>
+              {extractResult.skippedTables.map((st, idx) => (
+                <p key={idx} className="text-[11px] text-text-muted">
+                  • {st.sectionTitle} {st.pageRange ? `(p.${st.pageRange})` : ''}: {st.reason} ({st.rowCount} summary rows)
+                </p>
+              ))}
+            </div>
+          )}
+
           {/* Tier / Permission Notice if Target Schema is Restricted */}
           {!entityAccess[activeEntity] && (
-            <div className="p-4 rounded-xl border border-amber-300 bg-amber-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-start gap-2.5 text-amber-900">
-                <Lock size={17} className="shrink-0 mt-0.5" />
+            <div className="p-4 rounded-xl border border-accent-alt/30 bg-accent-alt/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5 text-primary">
+                <Lock size={17} className="shrink-0 mt-0.5 text-accent-alt" />
                 <div className="text-xs">
                   <p className="font-bold">
                     {entityTierLocked[activeEntity]
                       ? `${activeConfig.title} requires ${getPlanQuota('starter').name} plan or higher`
                       : `Your role (${user?.role}) cannot commit records to ${activeConfig.title}`}
                   </p>
-                  <p className="mt-0.5 text-amber-800">
+                  <p className="mt-0.5 text-text-secondary">
                     {entityTierLocked[activeEntity]
                       ? 'Upgrade in Billing or switch Destination Collection above to a permitted schema.'
                       : 'Ask your Business Admin for section access or select another permitted destination.'}
@@ -880,19 +1062,19 @@ export default function BulkImport() {
               className={cn(
                 'p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2',
                 remainingProductSlots < validSelectedRows.length
-                  ? 'border-amber-300 bg-amber-50 text-amber-900'
-                  : 'border-[#E2E8F0] bg-white text-[#475569]'
+                  ? 'border-accent-alt/30 bg-accent-alt/10 text-primary'
+                  : 'border-border bg-surface text-text-secondary'
               )}
             >
               <span>
-                <strong className="text-[#0F1E33]">{planQuota.name} SKU Allowance:</strong>{' '}
+                <strong className="text-primary">{planQuota.name} SKU Allowance:</strong>{' '}
                 <span className="font-mono tabular-nums">{remainingProductSlots}</span> slot(s) remaining out of{' '}
                 <span className="font-mono tabular-nums">{planQuota.maxProducts}</span>.{' '}
                 {remainingProductSlots < validSelectedRows.length &&
                   `Only the first ${remainingProductSlots} row(s) will be imported unless you upgrade.`}
               </span>
               {remainingProductSlots < validSelectedRows.length && (
-                <Link to="/billing" className="font-bold text-[#0F766E] hover:underline whitespace-nowrap">
+                <Link to="/billing" className="font-bold text-accent hover:underline whitespace-nowrap">
                   Increase Quota →
                 </Link>
               )}
@@ -901,14 +1083,14 @@ export default function BulkImport() {
 
           {/* Interactive AI Field Mapping Matrix */}
           {mappings.length > 0 && (
-            <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 space-y-3">
+            <div className="bg-surface border border-border rounded-xl p-5 space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div>
-                  <h3 className="text-sm font-bold text-[#0F1E33] flex items-center gap-2">
-                    <Layers size={16} className="text-[#0F766E]" />
+                  <h3 className="text-sm font-bold text-primary flex items-center gap-2">
+                    <Layers size={16} className="text-accent" />
                     AI Column &amp; Field Mapping ({mappings.filter((m) => m.targetField !== 'ignore').length} mapped)
                   </h3>
-                  <p className="text-xs text-[#64748B]">
+                  <p className="text-xs text-text-muted">
                     Adjust any source-to-schema mapping below—tabular datasets re-normalize automatically.
                   </p>
                 </div>
@@ -918,20 +1100,20 @@ export default function BulkImport() {
                 {mappings.map((m) => (
                   <div
                     key={m.sourceHeader}
-                    className="border border-[#E2E8F0] rounded-lg p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#F8FAFC]"
+                    className="border border-border rounded-lg p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-surface-alt"
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-bold text-[#0F1E33] truncate" title={m.sourceHeader}>
+                      <p className="text-xs font-bold text-primary truncate" title={m.sourceHeader}>
                         {m.sourceHeader}
                       </p>
-                      <p className="text-[10px] text-[#64748B] capitalize">
+                      <p className="text-[10px] text-text-muted capitalize">
                         {m.confidence || 'high'} match
                       </p>
                     </div>
-                    <ArrowRight size={14} className="hidden sm:block text-[#94A3B8] shrink-0" />
+                    <ArrowRight size={14} className="hidden sm:block text-text-muted shrink-0" />
                     <select
                       aria-label={`Map column ${m.sourceHeader}`}
-                      className="input-sm w-full sm:w-44 shrink-0 font-medium bg-white"
+                      className="input-sm w-full sm:w-44 shrink-0 font-medium"
                       value={m.targetField}
                       onChange={(e) => handleMappingChange(m.sourceHeader, e.target.value)}
                     >
@@ -950,17 +1132,17 @@ export default function BulkImport() {
           )}
 
           {/* Data Preview & Validation Grid */}
-          <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl overflow-hidden">
-            <div className="p-4 border-b border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="bg-surface border border-border rounded-xl overflow-hidden">
+            <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-3 text-xs">
-                <span className="font-bold text-[#0F1E33]">
-                  Preview Records ({validSelectedRows.length} valid selected of {rows.length})
+                <span className="font-bold text-primary">
+                  Preview Records ({validSelectedRows.length} actionable of {rows.length})
                 </span>
                 {invalidSelectedCount > 0 && (
                   <button
                     type="button"
                     onClick={handleRemoveInvalid}
-                    className="text-red-700 font-semibold hover:underline flex items-center gap-1"
+                    className="text-danger font-semibold hover:underline flex items-center gap-1"
                   >
                     <AlertTriangle size={13} />
                     Remove {invalidSelectedCount} invalid row{invalidSelectedCount === 1 ? '' : 's'}
@@ -971,7 +1153,7 @@ export default function BulkImport() {
               {/* Entity-specific import switches */}
               <div className="flex flex-wrap items-center gap-4 text-xs">
                 {activeEntity === 'sales' && (
-                  <label className="flex items-center gap-2 cursor-pointer text-[#334155]">
+                  <label className="flex items-center gap-2 cursor-pointer text-text-secondary">
                     <input
                       type="checkbox"
                       checked={deductStock}
@@ -981,7 +1163,7 @@ export default function BulkImport() {
                   </label>
                 )}
                 {activeEntity === 'refunds' && (
-                  <label className="flex items-center gap-2 cursor-pointer text-[#334155]">
+                  <label className="flex items-center gap-2 cursor-pointer text-text-secondary">
                     <input
                       type="checkbox"
                       checked={restoreStock}
@@ -991,7 +1173,7 @@ export default function BulkImport() {
                   </label>
                 )}
                 {activeEntity === 'purchases' && (
-                  <label className="flex items-center gap-2 cursor-pointer text-[#334155]">
+                  <label className="flex items-center gap-2 cursor-pointer text-text-secondary">
                     <input
                       type="checkbox"
                       checked={markReceived}
@@ -1005,7 +1187,7 @@ export default function BulkImport() {
 
             <div className="overflow-x-auto max-h-[480px]">
               <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0] sticky top-0 z-10">
+                <thead className="bg-surface-alt border-b border-border sticky top-0 z-10">
                   <tr>
                     <th className="p-2.5 w-9">
                       <input
@@ -1020,32 +1202,36 @@ export default function BulkImport() {
                         }}
                       />
                     </th>
-                    <th className="p-2.5 font-bold text-[#475569] uppercase tracking-wider w-10">#</th>
+                    <th className="p-2.5 font-bold text-text-secondary uppercase tracking-wider w-10">#</th>
                     {visibleFields.map((f) => (
                       <th
                         key={f.key}
-                        className="p-2.5 font-bold text-[#475569] uppercase tracking-wider whitespace-nowrap"
+                        className="p-2.5 font-bold text-text-secondary uppercase tracking-wider whitespace-nowrap"
                       >
                         {f.label}
-                        {f.required && <span className="text-red-500 ml-0.5">*</span>}
+                        {f.required && <span className="text-danger ml-0.5">*</span>}
                       </th>
                     ))}
-                    <th className="p-2.5 font-bold text-[#475569] uppercase tracking-wider whitespace-nowrap">
+                    <th className="p-2.5 font-bold text-text-secondary uppercase tracking-wider whitespace-nowrap">
+                      DB Match
+                    </th>
+                    <th className="p-2.5 font-bold text-text-secondary uppercase tracking-wider whitespace-nowrap">
                       Status
                     </th>
                     <th className="p-2.5 w-10" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#E2E8F0]">
+                <tbody className="divide-y divide-border">
                   {rows.map((row, rIdx) => {
                     const err = rowErrors[rIdx];
                     const checked = selectedIndices.has(rIdx);
+                    const rec = reconciledRows[rIdx];
                     return (
                       <tr
                         key={rIdx}
                         className={cn(
-                          'hover:bg-[#F8FAFC]',
-                          err && 'bg-red-50/50',
+                          'hover:bg-surface-alt/50',
+                          err && 'bg-danger/5',
                           !checked && 'opacity-50'
                         )}
                       >
@@ -1056,12 +1242,12 @@ export default function BulkImport() {
                             onChange={() => handleToggleRow(rIdx)}
                           />
                         </td>
-                        <td className="p-2.5 font-mono tabular-nums text-[#64748B]">{rIdx + 1}</td>
+                        <td className="p-2.5 font-mono tabular-nums text-text-muted">{rIdx + 1}</td>
                         {visibleFields.map((f) => (
                           <td key={f.key} className="p-1.5 min-w-[120px]">
                             {f.type === 'select' && f.options ? (
                               <select
-                                className="w-full px-2 py-1 text-xs border border-[#E2E8F0] rounded bg-white"
+                                className="w-full px-2 py-1 text-xs border border-border rounded bg-surface text-primary"
                                 value={String(row[f.key] ?? f.options[0])}
                                 onChange={(e) => handleCellEdit(rIdx, f.key, e.target.value)}
                               >
@@ -1076,14 +1262,14 @@ export default function BulkImport() {
                                 <input
                                   type={f.type === 'number' ? 'number' : 'text'}
                                   className={cn(
-                                    'w-full px-2 py-1 text-xs border border-[#E2E8F0] rounded bg-white',
+                                    'w-full px-2 py-1 text-xs border border-border rounded bg-surface text-primary',
                                     f.type === 'number' && 'font-mono tabular-nums text-right'
                                   )}
                                   value={row[f.key] ?? ''}
                                   onChange={(e) => handleCellEdit(rIdx, f.key, e.target.value)}
                                 />
                                 {f.key === 'itemName' && Array.isArray(row.items) && row.items.length > 1 && (
-                                  <span className="block text-[10px] text-[#0F766E] font-medium mt-0.5">
+                                  <span className="block text-[10px] text-accent font-medium mt-0.5">
                                     +{row.items.length} line items captured
                                   </span>
                                 )}
@@ -1092,13 +1278,53 @@ export default function BulkImport() {
                           </td>
                         ))}
                         <td className="p-2.5 whitespace-nowrap">
+                          {!rec || rec.action === 'create' ? (
+                            <span className="inline-flex px-2 py-0.5 rounded bg-accent/10 text-accent font-semibold">
+                              New
+                            </span>
+                          ) : (
+                            <div className="flex flex-col gap-1">
+                              <span
+                                title={rec.matchReason}
+                                className={cn(
+                                  'inline-flex w-fit px-1.5 py-0.5 rounded text-[10px] font-bold uppercase',
+                                  rec.action === 'conflict'
+                                    ? 'bg-accent-alt/15 text-accent-alt'
+                                    : rec.action === 'link'
+                                    ? 'bg-primary/10 text-primary'
+                                    : 'bg-surface-alt text-text-muted'
+                                )}
+                              >
+                                {rec.action}
+                              </span>
+                              <select
+                                aria-label={`Resolution for row ${rIdx + 1}`}
+                                value={rec.resolution || 'keep_existing'}
+                                onChange={(e) =>
+                                  setResolutions((prev) => ({
+                                    ...prev,
+                                    [rIdx]: e.target.value as 'overwrite' | 'keep_existing' | 'create_new',
+                                  }))
+                                }
+                                className="border border-border rounded px-1.5 py-0.5 text-[11px] bg-surface text-primary"
+                              >
+                                <option value="keep_existing">Skip / Keep Existing</option>
+                                {activeEntity === 'products' && <option value="overwrite">Update Existing</option>}
+                                <option value="create_new">Create New</option>
+                              </select>
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-2.5 whitespace-nowrap">
                           {err ? (
-                            <span className="text-red-700 font-semibold flex items-center gap-1">
+                            <span className="text-danger font-semibold flex items-center gap-1">
                               <AlertTriangle size={12} />
                               {err}
                             </span>
+                          ) : rec?.resolution === 'keep_existing' && rec.action !== 'create' ? (
+                            <span className="text-text-muted font-medium">Skipped</span>
                           ) : (
-                            <span className="text-[#0F766E] font-semibold flex items-center gap-1">
+                            <span className="text-accent font-semibold flex items-center gap-1">
                               <Check size={12} />
                               Ready
                             </span>
@@ -1108,7 +1334,7 @@ export default function BulkImport() {
                           <button
                             type="button"
                             onClick={() => handleRemoveRow(rIdx)}
-                            className="p-1 text-[#94A3B8] hover:text-red-600"
+                            className="p-1 text-text-muted hover:text-danger"
                             title="Remove row"
                           >
                             <Trash2 size={14} />
@@ -1121,11 +1347,11 @@ export default function BulkImport() {
               </table>
             </div>
 
-            <div className="p-4 border-t border-[#E2E8F0] bg-[#F8FAFC] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="text-xs text-[#475569]">
-                Ready to commit <strong className="text-[#0F1E33]">{validSelectedRows.length}</strong>{' '}
-                valid record{validSelectedRows.length === 1 ? '' : 's'} into{' '}
-                <strong className="text-[#0F1E33]">{activeConfig.title}</strong>.
+            <div className="p-4 border-t border-border bg-surface-alt flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs text-text-secondary">
+                Ready to commit <strong className="text-primary">{validSelectedRows.length}</strong>{' '}
+                actionable record{validSelectedRows.length === 1 ? '' : 's'} into{' '}
+                <strong className="text-primary">{activeConfig.title}</strong>.
               </div>
               <div className="flex flex-wrap items-center gap-2.5">
                 <button
@@ -1162,31 +1388,31 @@ export default function BulkImport() {
 
       {/* Session Import History */}
       {sessionJobs.length > 0 && (
-        <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl overflow-hidden">
-          <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center justify-between">
-            <h3 className="text-xs font-bold text-[#0F1E33] uppercase tracking-wider">
+        <div className="bg-surface border border-border rounded-xl overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
+            <h3 className="text-xs font-bold text-primary uppercase tracking-wider">
               Completed Imports This Session
             </h3>
-            <span className="text-xs text-[#64748B] font-mono tabular-nums">
+            <span className="text-xs text-text-muted font-mono tabular-nums">
               {sessionJobs.length} batch{sessionJobs.length === 1 ? '' : 'es'}
             </span>
           </div>
-          <div className="divide-y divide-[#E2E8F0]">
+          <div className="divide-y divide-border">
             {sessionJobs.map((job) => (
               <div
                 key={job.id}
                 className="px-5 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
               >
                 <div className="flex items-center gap-2.5">
-                  <CheckCircle2 size={15} className="text-[#0F766E] shrink-0" />
-                  <span className="font-bold text-[#0F1E33]">
+                  <CheckCircle2 size={15} className="text-accent shrink-0" />
+                  <span className="font-bold text-primary">
                     {SMART_ENTITY_CONFIGS[job.entityType].title}
                   </span>
-                  <span className="text-[#64748B]">
+                  <span className="text-text-muted">
                     · {job.fileName} · {job.detectedFormat}
                   </span>
                 </div>
-                <span className="font-mono tabular-nums font-semibold text-[#0F1E33]">
+                <span className="font-mono tabular-nums font-semibold text-primary">
                   +{job.importedCount} committed
                 </span>
               </div>

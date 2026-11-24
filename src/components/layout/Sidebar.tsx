@@ -350,6 +350,20 @@ export function Sidebar({ isOpen, onClose, isMinimized = false, onToggleMinimize
         <div className={cn('p-4 border-t border-white/10 space-y-2', isMinimized && 'lg:p-2.5')}>
           <PWAInstallButton compact={false} iconOnly={isMinimized} />
 
+          <a
+            href="/PrimeStock-BMS-System-Guide.pdf"
+            download="PrimeStock-BMS-System-Guide.pdf"
+            title="Download System Guide (PDF)"
+            aria-label="Download System Guide (PDF)"
+            className={cn(
+              'flex items-center gap-3 px-4 py-2.5 w-full text-white/75 hover:text-white hover:bg-white/10 rounded-lg transition-all',
+              isMinimized && 'lg:justify-center lg:px-0'
+            )}
+          >
+            <FileText size={19} />
+            <span className={cn('text-sm', isMinimized && 'lg:hidden')}>System Guide (PDF)</span>
+          </a>
+
           <button
             type="button"
             title="Logout"

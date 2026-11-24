@@ -45,8 +45,10 @@ import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
 
 interface PendingSignupInfo {
-  fullName: string;
-  businessName: string;
+  fullName?: string;
+  businessName?: string;
+  legalAcceptedAt?: string;
+  legalVersion?: string;
 }
 
 interface CachedSession {
@@ -541,6 +543,8 @@ async function syncAuthenticatedUser(
       plan: defaultPlan,
       status: 'trial',
       trialEndsAt: new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000).toISOString(),
+      legalAcceptedAt: signupMeta?.legalAcceptedAt,
+      legalVersion: signupMeta?.legalVersion,
       createdAt: nowIso,
       preferences: {
         taxEnabled: false,
@@ -814,11 +818,20 @@ export function useAuthObserver() {
 export function useAuth() {
   const { setAuthenticating, setAuthError, clearAuthError, logout } = useAuthStore();
 
-  const loginWithGoogle = async () => {
+  const loginWithGoogle = async (options?: {
+    legalAcceptedAt?: string;
+    legalVersion?: string;
+  }) => {
     if (googlePopupInFlight || emailAuthInFlight) return;
     googlePopupInFlight = true;
     clearAuthError();
     setAuthenticating(true);
+    if (options?.legalAcceptedAt) {
+      pendingSignupInfo = {
+        legalAcceptedAt: options.legalAcceptedAt,
+        legalVersion: options.legalVersion || '2026-11',
+      };
+    }
 
     try {
       const provider = new GoogleAuthProvider();
@@ -911,6 +924,8 @@ export function useAuth() {
     businessName: string;
     email: string;
     password: string;
+    legalAccepted?: boolean;
+    legalVersion?: string;
   }): Promise<{ ok: boolean; email?: string }> => {
     if (googlePopupInFlight || emailAuthInFlight) return { ok: false };
 
@@ -923,6 +938,10 @@ export function useAuth() {
       setAuthError('Please complete your full name, business name, and email address.');
       return { ok: false };
     }
+    if (!params.legalAccepted) {
+      setAuthError('Please review and accept the Terms of Service and Privacy Policy before creating an account.');
+      return { ok: false };
+    }
     if (password.length < 6) {
       setAuthError('Password must be at least 6 characters long.');
       return { ok: false };
@@ -932,7 +951,12 @@ export function useAuth() {
     registrationSignOutPending = true;
     clearAuthError();
     setAuthenticating(true);
-    pendingSignupInfo = { fullName, businessName };
+    pendingSignupInfo = {
+      fullName,
+      businessName,
+      legalAcceptedAt: new Date().toISOString(),
+      legalVersion: params.legalVersion || '2026-11',
+    };
 
     try {
       const credential = await createUserWithEmailAndPassword(auth, email, password);

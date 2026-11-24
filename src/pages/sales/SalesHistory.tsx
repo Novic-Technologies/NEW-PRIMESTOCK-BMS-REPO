@@ -17,7 +17,8 @@ import { useBranches } from '../../hooks/useBranches';
 import { useAuthStore } from '../../store/authStore';
 import { Sale } from '../../types';
 import { formatUGX, formatDate } from '../../utils/format';
-import { printViaThermalSerial } from '../../utils/thermalPrint';
+import { printReceiptDispatch } from '../../utils/thermalPrint';
+import { QrCodeImage } from '../../components/shared/QrCodeImage';
 import { buildSaleWhatsAppUrl } from '../../utils/whatsapp';
 import { canAccessFeature } from '../../utils/planLimits';
 import {
@@ -35,6 +36,7 @@ export default function SalesHistory() {
     sales,
     isLoading,
     refundSale,
+    retryEfrisFiscalization,
     settlePendingSale,
     bulkImportSales,
     bulkImportRefunds,
@@ -49,6 +51,7 @@ export default function SalesHistory() {
   const [refundReason, setRefundReason] = useState('');
   const [settleTarget, setSettleTarget] = useState<Sale | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRetryingEfris, setIsRetryingEfris] = useState(false);
   const [importEntity, setImportEntity] = useState<'sales' | 'refunds' | null>(null);
 
   const canManageSales = user?.role === 'admin' || user?.role === 'manager';
@@ -129,9 +132,24 @@ export default function SalesHistory() {
   const handleThermalPrint = async (sale: Sale) => {
     if (!tenant) return;
     const cust = sale.customerId ? customerMap.get(sale.customerId) || null : null;
-    const res = await printViaThermalSerial(sale, tenant, cust);
+    const res = await printReceiptDispatch(sale, tenant, cust);
     if (res.mode === 'serial') {
-      toast.success('Sent to thermal ESC/POS printer');
+      toast.success('Sent to USB/Serial thermal printer');
+    } else if (res.mode === 'bluetooth') {
+      toast.success('Sent to Bluetooth thermal printer');
+    } else if (res.mode === 'rawbt') {
+      toast.success('Opened RawBT print intent');
+    }
+  };
+
+  const handleRetryEfris = async () => {
+    if (!selectedSale || isRetryingEfris) return;
+    setIsRetryingEfris(true);
+    try {
+      const updated = await retryEfrisFiscalization(selectedSale.id);
+      if (updated) setSelectedSale(updated);
+    } finally {
+      setIsRetryingEfris(false);
     }
   };
 
@@ -215,7 +233,7 @@ export default function SalesHistory() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-1 p-1 bg-white border border-border rounded-lg self-start sm:self-auto max-w-full overflow-x-auto">
+          <div className="flex items-center gap-1 p-1 bg-surface border border-border rounded-lg self-start sm:self-auto max-w-full overflow-x-auto">
             {(['all', 'completed', 'pending', 'refunded'] as const).map((status) => (
               <button
                 key={status}
@@ -279,18 +297,29 @@ export default function SalesHistory() {
                         {formatUGX(sale.total)}
                       </td>
                       <td className="px-6 py-4">
-                        <span
-                          className={cn(
-                            'text-xs font-bold uppercase',
-                            sale.status === 'completed'
-                              ? 'text-accent'
-                              : sale.status === 'pending'
-                              ? 'text-accent-alt'
-                              : 'text-danger'
-                          )}
-                        >
-                          {sale.status}
-                        </span>
+                        <div className="flex flex-col items-start gap-1">
+                          <span
+                            className={cn(
+                              'text-xs font-bold uppercase',
+                              sale.status === 'completed'
+                                ? 'text-accent'
+                                : sale.status === 'pending'
+                                ? 'text-accent-alt'
+                                : 'text-danger'
+                            )}
+                          >
+                            {sale.status}
+                          </span>
+                          {sale.efrisFdn ? (
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent/10 text-accent font-semibold">
+                              FDN {sale.efrisFdn.slice(-8)}
+                            </span>
+                          ) : sale.efrisStatus === 'pending' ? (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-accent-alt/10 text-accent-alt">
+                              EFRIS Pending
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="inline-flex items-center gap-2">
@@ -427,7 +456,7 @@ export default function SalesHistory() {
       {/* Receipt Inspection Modal */}
       {selectedSale && tenant && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-primary text-white shrink-0 no-print">
               <div className="flex items-center gap-2 min-w-0">
                 <Receipt size={20} className="shrink-0" />
@@ -514,6 +543,14 @@ export default function SalesHistory() {
                     <span className="font-mono tabular-nums">-{formatUGX(selectedSale.discount)}</span>
                   </div>
                 )}
+                {(selectedSale.loyaltyDiscountUgx ?? 0) > 0 && (
+                  <div className="flex justify-between text-accent">
+                    <span>Loyalty Redeemed ({selectedSale.loyaltyPointsRedeemed || 0} pts)</span>
+                    <span className="font-mono tabular-nums">
+                      -{formatUGX(selectedSale.loyaltyDiscountUgx || 0)}
+                    </span>
+                  </div>
+                )}
                 {(selectedSale.taxAmount ?? 0) > 0 && (
                   <div className="flex justify-between text-text-secondary">
                     <span>VAT ({selectedSale.taxRate ?? 18}%)</span>
@@ -546,6 +583,64 @@ export default function SalesHistory() {
                     </span>
                   </div>
                 )}
+                {(selectedSale.loyaltyPointsEarned ?? 0) > 0 && (
+                  <div className="flex justify-between text-xs text-accent font-semibold">
+                    <span>Loyalty Points Earned</span>
+                    <span className="font-mono tabular-nums">+{selectedSale.loyaltyPointsEarned} pts</span>
+                  </div>
+                )}
+
+                {(selectedSale.efrisFdn || tenant.preferences?.efrisEnabled) && (
+                  <div className="mt-3 p-3 rounded-xl border border-border bg-surface-alt/70 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-primary uppercase tracking-wider text-[11px]">
+                        URA EFRIS {selectedSale.status === 'refunded' ? 'Credit Note' : 'Fiscal Verification'}
+                      </span>
+                      {selectedSale.efrisFdn ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-accent/15 text-accent uppercase">
+                          {selectedSale.efrisStatus === 'sandbox' ? 'Sandbox' : 'Fiscalized'}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-accent-alt/15 text-accent-alt uppercase">
+                          {selectedSale.efrisStatus || 'Pending'}
+                        </span>
+                      )}
+                    </div>
+                    {selectedSale.efrisFdn ? (
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="space-y-0.5 min-w-0 font-mono text-[11px]">
+                          <p className="text-primary truncate">FDN: {selectedSale.efrisFdn}</p>
+                          {selectedSale.efrisVerificationCode && (
+                            <p className="text-text-secondary truncate">
+                              Code: {selectedSale.efrisVerificationCode}
+                            </p>
+                          )}
+                        </div>
+                        {selectedSale.efrisQrData && (
+                          <QrCodeImage
+                            value={selectedSale.efrisQrData}
+                            size={80}
+                            alt={`EFRIS QR ${selectedSale.efrisFdn}`}
+                            className="shrink-0"
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2 no-print">
+                        <span className="text-text-muted">Not yet synced with URA EFRIS.</span>
+                        <button
+                          type="button"
+                          disabled={isRetryingEfris}
+                          onClick={handleRetryEfris}
+                          className="btn btn-secondary py-1 px-2.5 text-[11px] whitespace-nowrap"
+                        >
+                          {isRetryingEfris ? 'Fiscalizing...' : 'Retry EFRIS'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="text-center pt-3 border-t border-dashed border-border space-y-1">
                   {tenant.preferences?.receiptFooter && (
                     <p className="text-xs text-text-muted">{tenant.preferences.receiptFooter}</p>
@@ -588,7 +683,7 @@ export default function SalesHistory() {
       {/* Refund Confirmation Modal */}
       {refundTarget && (
         <div className="fixed inset-0 bg-primary/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-5 border-b border-border flex items-center justify-between bg-danger text-white shrink-0">
               <h3 className="text-lg font-bold text-white truncate pr-2">Refund {refundTarget.reference}</h3>
               <button

@@ -127,10 +127,10 @@ export default function MasterTiersUpgrades() {
     <form onSubmit={handleSave} className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[#0F1E33] tracking-tight">
+          <h1 className="text-2xl font-bold text-primary tracking-tight">
             Tiers, Quotas &amp; Upgrade Paths
           </h1>
-          <p className="text-sm text-[#475569] mt-0.5">
+          <p className="text-sm text-text-secondary mt-0.5">
             Central governance over subscription pricing, strict quota caps, feature gates, and permitted tier upgrade transitions across all merchants.
           </p>
         </div>
@@ -156,19 +156,19 @@ export default function MasterTiersUpgrades() {
       </div>
 
       {/* 1. Global Lifecycle & Enforcement Policies */}
-      <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-5 space-y-4">
+      <div className="bg-surface border border-border rounded-xl p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-bold text-[#0F1E33] flex items-center gap-2">
-              <ShieldCheck size={16} className="text-[#0F766E]" />
+            <h2 className="text-sm font-bold text-primary flex items-center gap-2">
+              <ShieldCheck size={16} className="text-accent" />
               Global Onboarding, Renewal &amp; Enforcement Controls
             </h2>
-            <p className="text-xs text-[#64748B]">
+            <p className="text-xs text-text-muted">
               Applied automatically to new business registrations, Billing checkout calculations, and expiry sweeps.
             </p>
           </div>
           {draft.updatedAt && (
-            <span className="text-[11px] font-mono text-[#64748B]">
+            <span className="text-[11px] font-mono text-text-muted">
               Synced {formatDate(draft.updatedAt)}
             </span>
           )}
@@ -176,7 +176,7 @@ export default function MasterTiersUpgrades() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
-            <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+            <label className="block text-xs font-bold text-primary mb-1">
               Default Signup Trial Tier
             </label>
             <select
@@ -199,7 +199,7 @@ export default function MasterTiersUpgrades() {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+            <label className="block text-xs font-bold text-primary mb-1">
               Free Trial Length (Days)
             </label>
             <input
@@ -219,7 +219,7 @@ export default function MasterTiersUpgrades() {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+            <label className="block text-xs font-bold text-primary mb-1">
               Pre-Expiry Reminder Lead (Days)
             </label>
             <input
@@ -239,7 +239,7 @@ export default function MasterTiersUpgrades() {
           </div>
 
           <div className="flex flex-col justify-center gap-2 pt-1">
-            <label className="flex items-center gap-2 text-xs font-semibold text-[#0F1E33] cursor-pointer">
+            <label className="flex items-center gap-2 text-xs font-semibold text-primary cursor-pointer">
               <input
                 type="checkbox"
                 checked={draft.strictEnforcement}
@@ -250,7 +250,7 @@ export default function MasterTiersUpgrades() {
               />
               Strict Quota Blocking
             </label>
-            <label className="flex items-center gap-2 text-xs font-semibold text-[#0F1E33] cursor-pointer">
+            <label className="flex items-center gap-2 text-xs font-semibold text-primary cursor-pointer">
               <input
                 type="checkbox"
                 checked={draft.autoLockExpired}
@@ -264,7 +264,7 @@ export default function MasterTiersUpgrades() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-[#D5DEE9]">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-border">
           {(
             [
               { key: 'm1', label: '1-Month Discount (%)' },
@@ -274,7 +274,7 @@ export default function MasterTiersUpgrades() {
             ] as const
           ).map((item) => (
             <div key={item.key}>
-              <label className="block text-[11px] font-bold text-[#475569] mb-1">
+              <label className="block text-[11px] font-bold text-text-secondary mb-1">
                 {item.label}
               </label>
               <input
@@ -300,7 +300,7 @@ export default function MasterTiersUpgrades() {
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-[#0F1E33] mb-1">
+          <label className="block text-xs font-bold text-primary mb-1">
             Merchant Billing Page Banner Headline
           </label>
           <input
@@ -323,19 +323,19 @@ export default function MasterTiersUpgrades() {
           return (
             <div
               key={planId}
-              className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl p-4 space-y-3"
+              className="bg-surface border border-border rounded-xl p-4 space-y-3"
             >
-              <div className="flex items-center justify-between border-b border-[#D5DEE9] pb-2.5">
-                <span className="text-[11px] font-mono uppercase font-bold text-[#64748B]">
+              <div className="flex items-center justify-between border-b border-border pb-2.5">
+                <span className="text-[11px] font-mono uppercase font-bold text-text-muted">
                   {planId}
                 </span>
-                <span className="text-xs font-bold font-mono tabular-nums text-[#0F766E]">
+                <span className="text-xs font-bold font-mono tabular-nums text-accent">
                   {formatUGX(tier.monthlyPriceUgx)}/mo
                 </span>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                <label className="block text-[11px] font-bold text-text-secondary mb-1">
                   Display Name
                 </label>
                 <input
@@ -348,7 +348,7 @@ export default function MasterTiersUpgrades() {
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                <label className="block text-[11px] font-bold text-text-secondary mb-1">
                   Monthly Fee (UGX)
                 </label>
                 <input
@@ -366,7 +366,7 @@ export default function MasterTiersUpgrades() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                  <label className="block text-[11px] font-bold text-text-secondary mb-1">
                     Max SKUs (-1 = ∞)
                   </label>
                   <input
@@ -380,7 +380,7 @@ export default function MasterTiersUpgrades() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                  <label className="block text-[11px] font-bold text-text-secondary mb-1">
                     Max Staff (-1 = ∞)
                   </label>
                   <input
@@ -394,7 +394,7 @@ export default function MasterTiersUpgrades() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                  <label className="block text-[11px] font-bold text-text-secondary mb-1">
                     Max Branches
                   </label>
                   <input
@@ -408,7 +408,7 @@ export default function MasterTiersUpgrades() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                  <label className="block text-[11px] font-bold text-text-secondary mb-1">
                     AI Calls / Day
                   </label>
                   <input
@@ -426,7 +426,7 @@ export default function MasterTiersUpgrades() {
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-[#475569] mb-1">
+                <label className="block text-[11px] font-bold text-text-secondary mb-1">
                   Billing Card Highlights (one per line)
                 </label>
                 <textarea
@@ -444,7 +444,7 @@ export default function MasterTiersUpgrades() {
                 />
               </div>
 
-              <div className="pt-1 border-t border-[#D5DEE9] text-[11px] text-[#64748B] font-mono">
+              <div className="pt-1 border-t border-border text-[11px] text-text-muted font-mono">
                 Enforced: {formatLimitDisplay(tier.maxProducts)} SKUs ·{' '}
                 {formatLimitDisplay(tier.maxUsers)} users ·{' '}
                 {formatLimitDisplay(tier.maxBranches)} branch(es)
@@ -455,20 +455,20 @@ export default function MasterTiersUpgrades() {
       </div>
 
       {/* 3. Feature Gate Matrix */}
-      <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-[#D5DEE9]">
-          <h2 className="text-sm font-bold text-[#0F1E33] flex items-center gap-2">
-            <Layers size={16} className="text-[#0F766E]" />
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-bold text-primary flex items-center gap-2">
+            <Layers size={16} className="text-accent" />
             Interactive Module &amp; Feature Gate Matrix
           </h2>
-          <p className="text-xs text-[#64748B] mt-0.5">
+          <p className="text-xs text-text-muted mt-0.5">
             Toggle which tiers unlock each operational module. TierGate and Billing immediately enforce changes live.
           </p>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs min-w-[680px]">
-            <thead className="bg-[#F1F5F9] border-b border-[#D5DEE9] text-[11px] font-bold text-[#475569] uppercase">
+            <thead className="bg-surface-alt border-b border-border text-[11px] font-bold text-text-secondary uppercase">
               <tr>
                 <th className="p-3.5">Capability / Module</th>
                 {PLAN_ORDER.map((planId) => (
@@ -478,10 +478,10 @@ export default function MasterTiersUpgrades() {
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#D5DEE9]">
+            <tbody className="divide-y divide-border">
               {FEATURE_KEYS.map((featureKey) => (
-                <tr key={featureKey} className="hover:bg-[#F1F5F9]">
-                  <td className="p-3.5 font-semibold text-[#0F1E33]">
+                <tr key={featureKey} className="hover:bg-surface-alt">
+                  <td className="p-3.5 font-semibold text-primary">
                     {FEATURE_LABELS[featureKey]}
                   </td>
                   {PLAN_ORDER.map((planId) => {
@@ -494,8 +494,8 @@ export default function MasterTiersUpgrades() {
                           className={cn(
                             'inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold border transition-colors',
                             enabled
-                              ? 'bg-[#0F766E]/10 text-[#0F766E] border-[#0F766E]/30'
-                              : 'bg-[#F1F5F9] text-[#64748B] border-[#D5DEE9]'
+                              ? 'bg-accent/10 text-accent border-accent/30'
+                              : 'bg-surface-alt text-text-muted border-border'
                           )}
                         >
                           {enabled ? <CheckCircle2 size={13} /> : <Lock size={12} />}
@@ -512,19 +512,19 @@ export default function MasterTiersUpgrades() {
       </div>
 
       {/* 4. Central Upgrade Paths Matrix */}
-      <div className="bg-[#FBFDFF] border border-[#D5DEE9] rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-[#D5DEE9]">
-          <h2 className="text-sm font-bold text-[#0F1E33]">
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-bold text-primary">
             Permitted Upgrade Paths Matrix
           </h2>
-          <p className="text-xs text-[#64748B] mt-0.5">
+          <p className="text-xs text-text-muted mt-0.5">
             Control which destination tiers a business on a given plan is permitted to upgrade or switch into from its Billing console (renewing the active plan is always allowed).
           </p>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs min-w-[760px]">
-            <thead className="bg-[#F1F5F9] border-b border-[#D5DEE9] text-[11px] font-bold text-[#475569] uppercase">
+            <thead className="bg-surface-alt border-b border-border text-[11px] font-bold text-text-secondary uppercase">
               <tr>
                 <th className="p-3.5">Current Business Tier</th>
                 {PLAN_ORDER.map((targetId) => (
@@ -535,12 +535,12 @@ export default function MasterTiersUpgrades() {
                 <th className="p-3.5">Active Upgrade Path Summary</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#D5DEE9]">
+            <tbody className="divide-y divide-border">
               {PLAN_ORDER.map((sourceId) => {
                 const targets = draft.tiers[sourceId].allowedUpgradeTargets || [];
                 return (
-                  <tr key={sourceId} className="hover:bg-[#F1F5F9]">
-                    <td className="p-3.5 font-bold text-[#0F1E33]">
+                  <tr key={sourceId} className="hover:bg-surface-alt">
+                    <td className="p-3.5 font-bold text-primary">
                       {draft.tiers[sourceId].name}
                     </td>
                     {PLAN_ORDER.map((targetId) => {
@@ -549,7 +549,7 @@ export default function MasterTiersUpgrades() {
                       return (
                         <td key={targetId} className="p-3.5 text-center">
                           {isSelf ? (
-                            <span className="text-[11px] font-semibold text-[#94A3B8]">
+                            <span className="text-[11px] font-semibold text-text-muted">
                               Renewal Only
                             </span>
                           ) : (
@@ -562,8 +562,8 @@ export default function MasterTiersUpgrades() {
                               <span
                                 className={
                                   checked
-                                    ? 'font-semibold text-[#0F766E]'
-                                    : 'text-[#64748B]'
+                                    ? 'font-semibold text-accent'
+                                    : 'text-text-muted'
                                 }
                               >
                                 {checked ? 'Allowed' : 'Blocked'}
@@ -573,13 +573,13 @@ export default function MasterTiersUpgrades() {
                         </td>
                       );
                     })}
-                    <td className="p-3.5 text-[#475569]">
+                    <td className="p-3.5 text-text-secondary">
                       {targets.length === 0 ? (
-                        <span className="text-[#94A3B8]">Renewal of current tier only</span>
+                        <span className="text-text-muted">Renewal of current tier only</span>
                       ) : (
                         <span className="inline-flex items-center gap-1 flex-wrap font-medium">
                           {draft.tiers[sourceId].name}
-                          <ArrowRight size={12} className="text-[#0F766E]" />
+                          <ArrowRight size={12} className="text-accent" />
                           {targets.map((t) => draft.tiers[t].name).join(', ')}
                         </span>
                       )}

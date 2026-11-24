@@ -4,13 +4,14 @@ import { Clock, Lock, ArrowRight, Gift, Bell, X } from 'lucide-react';
 import { useTrialGuard } from '../../hooks/useTrialGuard';
 import { useAuthStore } from '../../store/authStore';
 import { hasSectionAccess } from '../../utils/rbac';
-import { getTrialDaysCount } from '../../utils/planLimits';
+import { formatRemainingCountdown } from '../../utils/trialUtils';
+import { formatDate } from '../../utils/format';
 import { cn } from '../../lib/utils';
 
 export function TrialBanner() {
   const { tenant, user, isMasterAdmin } = useAuthStore();
   const canManageBilling = hasSectionAccess(user, 'billing');
-  const trialDaysCount = getTrialDaysCount();
+  const trialState = useTrialGuard();
   const {
     isTrial,
     isActive,
@@ -19,9 +20,10 @@ export function TrialBanner() {
     isPendingApproval,
     isComplimentary,
     daysRemaining,
-    hoursRemaining,
+    totalTrialDays,
+    currentTrialDay,
     effectiveEndsAt,
-  } = useTrialGuard();
+  } = trialState;
 
   const [dismissedReminderAt, setDismissedReminderAt] = useState<string | null>(null);
 
@@ -35,6 +37,9 @@ export function TrialBanner() {
   const showTrialBanner = isTrial || isSoftLocked || showPaidRenewalWarning || isComplimentary;
 
   if (isMasterAdmin || (!showTrialBanner && !hasReminder)) return null;
+
+  const countdownText = formatRemainingCountdown(trialState);
+  const endLabel = effectiveEndsAt ? formatDate(effectiveEndsAt.toISOString()) : '';
 
   return (
     <div className="no-print">
@@ -91,14 +96,14 @@ export function TrialBanner() {
                 </>
               ) : !isTrial && effectiveEndsAt ? (
                 <>
-                  <strong>Subscription Expired:</strong> Your business records are preserved. Submit
-                  renewal payment in Billing for approval to resume operations.
+                  <strong>Subscription Locked / Expired:</strong>{' '}
+                  {tenant?.disabledReason ||
+                    'Your business records are safely preserved. Submit renewal payment in Billing to unlock full workspace access.'}
                 </>
               ) : (
                 <>
-                  <strong>{trialDaysCount}-Day Free Trial Ended:</strong> All your sales, products, and customer records
-                  are safely preserved. Submit plan payment in Billing for Master Admin approval to unlock
-                  full access.
+                  <strong>{totalTrialDays}-Day Free Trial Ended:</strong> All your sales, products, and customer records
+                  are safely preserved. Submit plan payment in Billing for approval to unlock full access.
                 </>
               )}
             </span>
@@ -119,7 +124,7 @@ export function TrialBanner() {
             <span>
               <strong>Complimentary Free Access Active</strong>
               {tenant?.complimentaryNote ? ` · ${tenant.complimentaryNote}` : ''}
-              {effectiveEndsAt ? ` · Valid until ${effectiveEndsAt.toLocaleDateString('en-UG')}` : ''}
+              {effectiveEndsAt ? ` · Valid until ${endLabel}` : ''}
             </span>
           </div>
         </div>
@@ -128,11 +133,9 @@ export function TrialBanner() {
           <div className="flex items-center gap-2 text-primary">
             <Clock size={15} className="text-accent-alt shrink-0" />
             <span>
-              Subscription expires in{' '}
-              <strong className="font-mono tabular-nums">
-                {daysRemaining} {daysRemaining === 1 ? 'day' : 'days'}
-              </strong>
-              . Submit renewal early so your workspace stays uninterrupted.
+              Subscription renewal due ·{' '}
+              <strong className="font-mono tabular-nums">{countdownText}</strong>
+              {endLabel ? <span className="text-text-muted"> · Ends {endLabel}</span> : null}
             </span>
           </div>
           {canManageBilling && (
@@ -153,18 +156,20 @@ export function TrialBanner() {
               : 'bg-primary/5 border-border text-primary'
           )}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Clock
               size={15}
               className={daysRemaining <= 3 ? 'text-accent-alt shrink-0' : 'text-accent shrink-0'}
             />
             <span>
-              {trialDaysCount}-Day Free Trial ·{' '}
-              <strong className="font-mono tabular-nums">
-                {daysRemaining <= 1
-                  ? `${hoursRemaining} ${hoursRemaining === 1 ? 'hour' : 'hours'} remaining`
-                  : `${daysRemaining} days remaining`}
-              </strong>
+              {totalTrialDays}-Day Free Trial ·{' '}
+              <span className="font-semibold">
+                Day {currentTrialDay} of {totalTrialDays}
+              </span>{' '}
+              · <strong className="font-mono tabular-nums">{countdownText}</strong>
+              {endLabel ? (
+                <span className="hidden sm:inline text-text-muted"> · Ends {endLabel}</span>
+              ) : null}
             </span>
           </div>
           {canManageBilling && (

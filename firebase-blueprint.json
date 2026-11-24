@@ -73,7 +73,7 @@
         "ownerName": { "type": "string", "maxLength": 120 },
         "ownerPhone": { "type": "string", "maxLength": 30 },
         "plan": { "type": "string", "enum": ["micro", "starter", "business", "enterprise"] },
-        "status": { "type": "string", "enum": ["active", "suspended", "trial", "pending_approval"] },
+        "status": { "type": "string", "enum": ["active", "suspended", "locked", "trial", "pending_approval"] },
         "trialEndsAt": { "type": "string", "format": "date-time", "maxLength": 64 },
         "subscribedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
         "subscriptionEndsAt": { "type": "string", "format": "date-time", "maxLength": 64 },
@@ -97,6 +97,8 @@
         "lastReminderAt": { "type": "string", "format": "date-time", "maxLength": 64 },
         "lastReminderMessage": { "type": "string", "maxLength": 500 },
         "lastReminderChannel": { "type": "string", "maxLength": 40 },
+        "legalAcceptedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "legalVersion": { "type": "string", "maxLength": 32 },
         "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
         "branding": { "type": "object" },
         "preferences": { "type": "object" },
@@ -141,6 +143,7 @@
         "unit": { "type": "string", "maxLength": 32 },
         "batchNumber": { "type": "string", "maxLength": 64 },
         "expiryDate": { "type": "string", "maxLength": 32 },
+        "batches": { "type": "array" },
         "status": { "type": "string", "enum": ["active", "inactive"] },
         "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
@@ -173,6 +176,14 @@
         "cashTendered": { "type": "number" },
         "changeGiven": { "type": "number" },
         "splitPayments": { "type": "array" },
+        "loyaltyPointsEarned": { "type": "number" },
+        "loyaltyPointsRedeemed": { "type": "number" },
+        "loyaltyDiscountUgx": { "type": "number" },
+        "efrisFdn": { "type": "string", "maxLength": 64 },
+        "efrisVerificationCode": { "type": "string", "maxLength": 64 },
+        "efrisQrData": { "type": "string", "maxLength": 600 },
+        "efrisFiscalizedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "efrisStatus": { "type": "string", "enum": ["fiscalized", "sandbox", "pending", "failed"] },
         "status": { "type": "string", "enum": ["completed", "pending", "refunded"] },
         "refundedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
         "refundReason": { "type": "string", "maxLength": 300 },
@@ -217,12 +228,16 @@
         "reference": { "type": "string", "maxLength": 64 },
         "supplierId": { "type": "string", "maxLength": 128 },
         "supplierName": { "type": "string", "maxLength": 150 },
+        "currency": { "type": "string", "enum": ["UGX", "USD", "KES"] },
+        "exchangeRateToUgx": { "type": "number" },
+        "foreignTotalAmount": { "type": "number" },
         "items": { "type": "array" },
         "totalAmount": { "type": "number" },
         "paidAmount": { "type": "number" },
-        "status": { "type": "string", "enum": ["ordered", "received", "cancelled"] },
+        "status": { "type": "string", "enum": ["ordered", "partially_received", "received", "cancelled"] },
         "expectedDate": { "type": "string", "maxLength": 64 },
         "receivedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "grnHistory": { "type": "array" },
         "notes": { "type": "string", "maxLength": 300 },
         "createdBy": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
@@ -377,8 +392,12 @@
         "toBranchName": { "type": "string", "maxLength": 120 },
         "quantity": { "type": "number" },
         "notes": { "type": "string", "maxLength": 300 },
-        "status": { "type": "string", "enum": ["completed"] },
+        "status": { "type": "string", "enum": ["in_transit", "completed", "cancelled"] },
         "transferredBy": { "type": "string", "maxLength": 128 },
+        "dispatchedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "receivedAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "receivedBy": { "type": "string", "maxLength": 128 },
+        "receivedByName": { "type": "string", "maxLength": 120 },
         "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "tenantId", "productId", "fromBranchId", "toBranchId", "quantity", "status", "transferredBy", "createdAt"]
@@ -504,6 +523,20 @@
         "updatedBy": { "type": "string", "maxLength": 128 }
       },
       "required": ["id", "defaultSignupPlan", "trialDays", "reminderLeadDays", "strictEnforcement", "autoLockExpired", "multiMonthDiscounts", "tiers", "updatedAt"]
+    },
+    "AIUsage": {
+      "title": "AIUsage",
+      "description": "Server-persisted daily AI call quota counter per tenant.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "dateKey": { "type": "string", "maxLength": 32 },
+        "count": { "type": "number" },
+        "lastAction": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
+      },
+      "required": ["id", "tenantId", "dateKey", "count", "updatedAt"]
     }
   },
   "firestore": {
@@ -529,6 +562,7 @@
     "tenants/{tenantId}/payrollRuns/{payrollId}": { "schema": "PayrollRun", "description": "Monthly payroll runs" },
     "tenants/{tenantId}/auditLogs/{logId}": { "schema": "AuditLog", "description": "Immutable workspace audit trail" },
     "tenants/{tenantId}/aiChats/{chatId}": { "schema": "AIChatMessage", "description": "AI Copilot conversation history" },
+    "tenants/{tenantId}/aiUsage/{dateKey}": { "schema": "AIUsage", "description": "Daily AI call quota counter" },
     "tenants/{tenantId}/notifications/{notificationId}": { "schema": "AppNotification", "description": "In-app workspace notifications" }
   }
 }

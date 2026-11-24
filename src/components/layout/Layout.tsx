@@ -56,7 +56,7 @@ export function Layout() {
   }
 
   return (
-    <div className="flex min-h-screen bg-[#EDF1F6]">
+    <div className="flex min-h-screen bg-canvas">
       <Sidebar
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
@@ -116,7 +116,7 @@ export function Layout() {
             <Outlet />
           )}
         </main>
-        <footer className="px-4 md:px-8 py-4 border-t border-border bg-[#F4F7FB] text-xs text-text-muted flex flex-col sm:flex-row items-center justify-between gap-2 max-w-full no-print">
+        <footer className="px-4 md:px-8 py-4 border-t border-border bg-surface/80 text-xs text-text-muted flex flex-col sm:flex-row items-center justify-between gap-2 max-w-full no-print">
           <span>
             {isMasterAdmin
               ? `© ${new Date().getFullYear()} PrimeStock Platform · Owner Control Console`

@@ -332,7 +332,7 @@ export default function Customers() {
                     'px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
                     typeFilter === t
                       ? 'bg-primary text-white'
-                      : 'bg-white border border-border text-text-secondary hover:bg-surface-alt'
+                      : 'bg-surface border border-border text-text-secondary hover:bg-surface-alt'
                   )}
                 >
                   {t}
@@ -555,7 +555,7 @@ export default function Customers() {
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <h3 className="text-xl font-bold text-white">
                 {editingCustomer ? 'Edit Customer' : 'Add New Customer'}
@@ -646,7 +646,7 @@ export default function Customers() {
       {/* Record Customer Credit Repayment Modal */}
       {repayCustomer && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white">Record Credit Repayment</h3>
@@ -750,7 +750,7 @@ export default function Customers() {
       {/* AI Debt Reminder Modal */}
       {reminderCustomer && (
         <div className="fixed inset-0 bg-primary/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90dvh]">
             <div className="p-6 border-b border-border flex items-center justify-between bg-primary text-white shrink-0">
               <div className="flex items-center gap-2.5">
                 <Sparkles size={20} className="text-accent" />
