@@ -9,12 +9,18 @@ import { computeTrialState } from '../utils/trialUtils';
 import { canAccessFeature } from '../utils/planLimits';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { logWorkspaceAudit } from './useAuditLog';
+import { hasSectionAccess } from '../utils/rbac';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function usePayroll() {
   const { tenant, user, activeBranchId } = useAuthStore();
-  const [runs, setRuns] = useState<PayrollRun[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [runs, setRuns] = useState<PayrollRun[]>(
+    () => getHookCache<PayrollRun[]>('payrollRuns', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('payrollRuns', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -22,12 +28,15 @@ export function usePayroll() {
       setIsLoading(false);
       return;
     }
-    setIsLoading(true);
+    setRuns(getHookCache<PayrollRun[]>('payrollRuns', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('payrollRuns', tenant.id));
     const sub = liveQuery(() =>
       localDb.payrollRuns.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
-        setRuns([...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+        const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('payrollRuns', tenant.id, sorted);
+        setRuns(sorted);
         setIsLoading(false);
       },
       error: () => setIsLoading(false),
@@ -50,8 +59,8 @@ export function usePayroll() {
       toast.error('Uganda PAYE & NSSF Payroll requires Business Growth or Enterprise plan.');
       return;
     }
-    if (user.role !== 'admin' && user.role !== 'accountant') {
-      toast.error('Only business admins or accountants can process payroll runs');
+    if (user.role !== 'admin' && user.role !== 'accountant' && !hasSectionAccess(user, 'payroll')) {
+      toast.error('Only business admins, accountants, or authorized payroll staff can process payroll runs');
       return;
     }
 

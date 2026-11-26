@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Clock, Lock, ArrowRight, Gift, Bell, X } from 'lucide-react';
 import { useTrialGuard } from '../../hooks/useTrialGuard';
@@ -7,6 +7,15 @@ import { hasSectionAccess } from '../../utils/rbac';
 import { formatRemainingCountdown } from '../../utils/trialUtils';
 import { formatDate } from '../../utils/format';
 import { cn } from '../../lib/utils';
+
+function readDismissedReminder(tenantId?: string): string | null {
+  if (!tenantId) return null;
+  try {
+    return localStorage.getItem(`primestock_dismissed_rem_${tenantId}`);
+  } catch {
+    return null;
+  }
+}
 
 export function TrialBanner() {
   const { tenant, user, isMasterAdmin } = useAuthStore();
@@ -25,7 +34,30 @@ export function TrialBanner() {
     effectiveEndsAt,
   } = trialState;
 
-  const [dismissedReminderAt, setDismissedReminderAt] = useState<string | null>(null);
+  const [dismissedReminderAt, setDismissedReminderAt] = useState<string | null>(() =>
+    readDismissedReminder(tenant?.id)
+  );
+
+  useEffect(() => {
+    setDismissedReminderAt(readDismissedReminder(tenant?.id));
+  }, [tenant?.id]);
+
+  const handleDismissReminder = () => {
+    const reminderTimestamp = tenant?.lastReminderAt || null;
+    setDismissedReminderAt(reminderTimestamp);
+    if (tenant?.id && reminderTimestamp) {
+      try {
+        localStorage.setItem(`primestock_dismissed_rem_${tenant.id}`, reminderTimestamp);
+      } catch {
+        // Ignore storage errors
+      }
+      window.dispatchEvent(
+        new CustomEvent('primestock-reminder-dismissed', {
+          detail: { tenantId: tenant.id, reminderAt: reminderTimestamp },
+        })
+      );
+    }
+  };
 
   const hasReminder =
     Boolean(tenant?.lastReminderMessage && tenant?.lastReminderAt) &&
@@ -63,7 +95,7 @@ export function TrialBanner() {
             <button
               type="button"
               aria-label="Dismiss reminder"
-              onClick={() => setDismissedReminderAt(tenant?.lastReminderAt || null)}
+              onClick={handleDismissReminder}
               className="p-1 text-text-muted hover:text-primary rounded"
             >
               <X size={15} />

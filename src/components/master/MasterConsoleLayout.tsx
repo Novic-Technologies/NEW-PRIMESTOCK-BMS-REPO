@@ -153,6 +153,8 @@ export function MasterConsoleLayout() {
               aria-label={item.label}
               onMouseEnter={() => prefetchRoute(item.path)}
               onFocus={() => prefetchRoute(item.path)}
+              onPointerDown={() => prefetchRoute(item.path)}
+              onTouchStart={() => prefetchRoute(item.path)}
               onClick={() => setMobileOpen(false)}
               className={({ isActive }) =>
                 cn(

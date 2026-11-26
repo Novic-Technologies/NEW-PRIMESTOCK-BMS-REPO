@@ -9,12 +9,18 @@ import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
 import { logWorkspaceAudit } from './useAuditLog';
+import { canManageFinanceData, canManageInventoryData, hasSectionAccess } from '../utils/rbac';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function useCreditPayments() {
   const { tenant, user, activeBranchId } = useAuthStore();
-  const [payments, setPayments] = useState<CreditPayment[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [payments, setPayments] = useState<CreditPayment[]>(
+    () => getHookCache<CreditPayment[]>('creditPayments', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('creditPayments', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -23,12 +29,14 @@ export function useCreditPayments() {
       return;
     }
 
-    setIsLoading(true);
+    setPayments(getHookCache<CreditPayment[]>('creditPayments', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('creditPayments', tenant.id));
     const sub = liveQuery(() =>
       localDb.creditPayments.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('creditPayments', tenant.id, sorted);
         setPayments(sorted);
         setIsLoading(false);
       },
@@ -97,6 +105,15 @@ export function useCreditPayments() {
       toast.error('Your trial has expired. Upgrade in Billing first.');
       return;
     }
+    if (
+      !hasSectionAccess(user, 'customers') &&
+      !hasSectionAccess(user, 'pos') &&
+      !hasSectionAccess(user, 'sales') &&
+      !canManageFinanceData(user)
+    ) {
+      toast.error('You do not have permission to record customer repayments');
+      return;
+    }
     const customer = await localDb.customers.get(params.customerId);
     if (!customer) return;
 
@@ -156,6 +173,14 @@ export function useCreditPayments() {
     if (!tenant || !user) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (
+      !canManageInventoryData(user) &&
+      !hasSectionAccess(user, 'suppliers') &&
+      !canManageFinanceData(user)
+    ) {
+      toast.error('You do not have permission to record supplier payments');
       return;
     }
     const supplier = await localDb.suppliers.get(params.supplierId);

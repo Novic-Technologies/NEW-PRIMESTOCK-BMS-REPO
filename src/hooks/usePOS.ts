@@ -14,6 +14,8 @@ import { deductFefoBatches, restoreFefoBatches } from '../utils/inventoryMath';
 import { fiscalizeEfrisReceipt } from '../services/aiService';
 import { logWorkspaceAudit } from './useAuditLog';
 import { normalizeIsoDate, normalizeUgPhone } from '../utils/smartImportParser';
+import { canManageInventoryData, hasSectionAccess } from '../utils/rbac';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export interface CartItem extends Product {
@@ -49,8 +51,12 @@ export function usePOS() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [discount, setDiscount] = useState(0);
   const [customerId, setCustomerId] = useState<string | null>(null);
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [sales, setSales] = useState<Sale[]>(
+    () => getHookCache<Sale[]>('sales', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('sales', tenant.id) : false)
+  );
   const [heldCarts, setHeldCarts] = useState<HeldCart[]>([]);
   const [selectedCustomerType, setSelectedCustomerType] = useState<Customer['type'] | undefined>(undefined);
 
@@ -65,7 +71,8 @@ export function usePOS() {
       return;
     }
 
-    setIsLoading(true);
+    setSales(getHookCache<Sale[]>('sales', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('sales', tenant.id));
     const storageKey = `primestock_held_carts_${tenant.id}`;
     try {
       const saved = localStorage.getItem(storageKey);
@@ -79,6 +86,7 @@ export function usePOS() {
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('sales', tenant.id, sorted);
         setSales(sorted);
         setIsLoading(false);
       },
@@ -438,6 +446,10 @@ export function usePOS() {
     }
   ): Promise<Sale | undefined> => {
     if (!user || !tenant || cart.length === 0) return undefined;
+    if (!hasSectionAccess(user, 'pos')) {
+      toast.error('You do not have POS checkout permission');
+      return undefined;
+    }
 
     const trialState = computeTrialState(tenant);
     if (trialState.isSoftLocked) {
@@ -810,6 +822,10 @@ export function usePOS() {
     }
   ): Promise<boolean> => {
     if (!user || !tenant) return false;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return false;
+    }
     if (!['admin', 'manager'].includes(user.role)) {
       toast.error('Only managers or admins can settle pending invoices');
       return false;
@@ -854,6 +870,14 @@ export function usePOS() {
     if (!user || !tenant) return 0;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return 0;
+    }
+    if (
+      !canManageInventoryData(user) &&
+      !hasSectionAccess(user, 'sales') &&
+      !hasSectionAccess(user, 'bulk_import')
+    ) {
+      toast.error('You do not have permission to import sales');
       return 0;
     }
 

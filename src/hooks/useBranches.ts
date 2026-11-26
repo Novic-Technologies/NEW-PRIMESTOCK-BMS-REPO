@@ -10,12 +10,17 @@ import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
 import { getEffectivePlanQuota, isQuotaExceeded } from '../utils/planLimits';
 import { logWorkspaceAudit } from './useAuditLog';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function useBranches() {
   const { tenant, user, activeBranchId, setActiveBranchId } = useAuthStore();
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [branches, setBranches] = useState<Branch[]>(
+    () => getHookCache<Branch[]>('branches', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('branches', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -24,7 +29,8 @@ export function useBranches() {
       return;
     }
 
-    setIsLoading(true);
+    setBranches(getHookCache<Branch[]>('branches', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('branches', tenant.id));
     const sub = liveQuery(() =>
       localDb.branches.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
@@ -33,6 +39,7 @@ export function useBranches() {
           if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
           return a.createdAt.localeCompare(b.createdAt);
         });
+        setHookCache('branches', tenant.id, sorted);
         setBranches(sorted);
         setIsLoading(false);
 
@@ -137,7 +144,15 @@ export function useBranches() {
   };
 
   const updateBranch = async (branchId: string, updates: Partial<Branch>) => {
-    if (!tenant) return;
+    if (!tenant || !user) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!['admin', 'manager'].includes(user.role)) {
+      toast.error('Only managers or admins can update branches');
+      return;
+    }
     const existing = await localDb.branches.get(branchId);
     if (!existing) return;
 
@@ -192,6 +207,10 @@ export function useBranches() {
 
   const deleteBranch = async (branchId: string) => {
     if (!tenant || !user) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
     if (user.role !== 'admin') {
       toast.error('Only business admins can delete branches');
       return;

@@ -947,13 +947,13 @@ service cloud.firestore {
         allow get: if isValidId(supplierId) && (belongsToTenant(tenantId) || isMasterAdmin());
         allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(supplierId) &&
-          belongsToTenant(tenantId) &&
+          (canManageInventory(tenantId) || userHasSection('suppliers')) &&
           tenantNotSuspended(tenantId) &&
           tenantPlan(tenantId) in ['starter', 'business', 'enterprise'] &&
           isValidSupplier(incoming(), tenantId) &&
           incoming().id == supplierId;
         allow update: if isValidId(supplierId) &&
-          belongsToTenant(tenantId) &&
+          (canManageInventory(tenantId) || userHasSection('suppliers')) &&
           tenantNotSuspended(tenantId) &&
           tenantPlan(tenantId) in ['starter', 'business', 'enterprise'] &&
           isValidSupplier(incoming(), tenantId) &&
@@ -985,7 +985,7 @@ service cloud.firestore {
         allow get: if isValidId(expenseId) && (belongsToTenant(tenantId) || isMasterAdmin());
         allow list: if belongsToTenant(tenantId) || isMasterAdmin();
         allow create: if isValidId(expenseId) &&
-          belongsToTenant(tenantId) &&
+          (canAccessFinance(tenantId) || canManageInventory(tenantId)) &&
           tenantNotSuspended(tenantId) &&
           isValidExpense(incoming(), tenantId) &&
           incoming().id == expenseId &&

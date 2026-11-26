@@ -22,13 +22,20 @@ import { MASTER_ADMIN_EMAILS } from '../utils/masterAdmin';
 import { formatUGX } from '../utils/format';
 import { buildSubscriptionEmailHtml, sendTransactionalEmail } from '../services/notificationService';
 import { logWorkspaceAudit } from './useAuditLog';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function useBilling() {
   const { tenant, user, setTenant } = useAuthStore();
-  const [history, setHistory] = useState<BillingHistory[]>([]);
-  const [reminders, setReminders] = useState<SubscriptionReminder[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [history, setHistory] = useState<BillingHistory[]>(
+    () => getHookCache<BillingHistory[]>('billingHistory', tenant?.id) ?? []
+  );
+  const [reminders, setReminders] = useState<SubscriptionReminder[]>(
+    () => getHookCache<SubscriptionReminder[]>('billingReminders', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('billingHistory', tenant.id) : false)
+  );
   const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
@@ -39,12 +46,15 @@ export function useBilling() {
       return;
     }
 
-    setIsLoading(true);
+    setHistory(getHookCache<BillingHistory[]>('billingHistory', tenant.id) ?? []);
+    setReminders(getHookCache<SubscriptionReminder[]>('billingReminders', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('billingHistory', tenant.id));
     const dexieSub = liveQuery(() =>
       localDb.billingHistory.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('billingHistory', tenant.id, sorted);
         setHistory(sorted);
         setIsLoading(false);
       },
@@ -60,6 +70,7 @@ export function useBilling() {
         if (data.length > 0) {
           await localDb.billingHistory.bulkPut(data);
         }
+        setHookCache('billingHistory', tenant.id, data);
         setHistory(data);
         setIsLoading(false);
       },
@@ -78,7 +89,9 @@ export function useBilling() {
     const unsubReminders = onSnapshot(
       rq,
       (snapshot) => {
-        setReminders(snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as SubscriptionReminder)));
+        const list = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as SubscriptionReminder));
+        setHookCache('billingReminders', tenant.id, list);
+        setReminders(list);
       },
       (err) => {
         console.warn('Reminders watch skipped:', err);

@@ -14,12 +14,17 @@ import { canManageInventoryData } from '../utils/rbac';
 import { canAccessFeature } from '../utils/planLimits';
 import { logWorkspaceAudit } from './useAuditLog';
 import { normalizeIsoDate } from '../utils/smartImportParser';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function usePurchaseOrders() {
   const { tenant, user, activeBranchId } = useAuthStore();
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(
+    () => getHookCache<PurchaseOrder[]>('purchaseOrders', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('purchaseOrders', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -28,12 +33,14 @@ export function usePurchaseOrders() {
       return;
     }
 
-    setIsLoading(true);
+    setPurchaseOrders(getHookCache<PurchaseOrder[]>('purchaseOrders', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('purchaseOrders', tenant.id));
     const sub = liveQuery(() =>
       localDb.purchaseOrders.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('purchaseOrders', tenant.id, sorted);
         setPurchaseOrders(sorted);
         setIsLoading(false);
       },
@@ -375,7 +382,18 @@ export function usePurchaseOrders() {
 
   const cancelPurchaseOrder = async (poId: string) => {
     if (!tenant || !user) return;
-    if (!canManageInventoryData(user)) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!canAccessFeature(tenant, 'suppliersAndPOs')) {
+      toast.error('Purchase Orders require Starter plan or higher. Upgrade in Billing.');
+      return;
+    }
+    if (!canManageInventoryData(user)) {
+      toast.error('Only inventory staff, managers, or admins can cancel purchase orders');
+      return;
+    }
     const po = await localDb.purchaseOrders.get(poId);
     if (!po || po.status !== 'ordered') return;
     await syncEntity('purchaseOrders', 'update', { ...po, status: 'cancelled' });

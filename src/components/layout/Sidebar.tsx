@@ -317,6 +317,8 @@ export function Sidebar({ isOpen, onClose, isMinimized = false, onToggleMinimize
                 aria-label={item.label}
                 onMouseEnter={() => prefetchRoute(targetPath)}
                 onFocus={() => prefetchRoute(targetPath)}
+                onPointerDown={() => prefetchRoute(targetPath)}
+                onTouchStart={() => prefetchRoute(targetPath)}
                 onClick={() => {
                   if (window.innerWidth < 1024) onClose();
                 }}

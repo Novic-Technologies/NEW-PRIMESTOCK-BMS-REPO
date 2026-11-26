@@ -42,6 +42,8 @@ import { getDefaultSignupPlan, getPlanQuota, getTrialDaysCount } from '../utils/
 import { setSyncedPlatformPlansConfig } from '../utils/platformPlans';
 import { buildSubscriptionEmailHtml, sendTransactionalEmail } from '../services/notificationService';
 import { logWorkspaceAudit } from './useAuditLog';
+import { clearAllHookCaches } from '../utils/hookCache';
+import { resetWarmedHookScopes } from '../utils/warmHookCache';
 import toast from 'react-hot-toast';
 
 interface PendingSignupInfo {
@@ -116,6 +118,7 @@ function clearWorkspaceStorageKeys(uid?: string | null, tenantId?: string | null
         (tenantId && (k.includes(`_${tenantId}_`) || k.endsWith(`_${tenantId}`)));
       if (
         (isNotifKey && matchesScope) ||
+        (tenantId && k === `primestock_dismissed_rem_${tenantId}`) ||
         (tenantId && k.startsWith(`primestock_pos_held_carts_${tenantId}`))
       ) {
         keysToRemove.push(k);
@@ -718,6 +721,9 @@ export function useAuthObserver() {
             await syncAuthenticatedUser(firebaseUser);
           }
         } else {
+          clearCachedSession(useAuthStore.getState().user?.uid);
+          clearAllHookCaches();
+          resetWarmedHookScopes();
           applyTenantTheme(null);
           logout();
         }
@@ -741,6 +747,8 @@ export function useAuthObserver() {
         const latest = snap.data() as User;
         if (latest.status === 'inactive') {
           clearCachedSession(user.uid);
+          clearAllHookCaches();
+          resetWarmedHookScopes();
           await clearAllLocalData().catch(() => {});
           await signOut(auth).catch(() => {});
           applyTenantTheme(null);
@@ -965,6 +973,8 @@ export function useAuth() {
 
       const provisioned = await syncAuthenticatedUser(credential.user, { commitToStore: false });
       clearCachedSession(credential.user.uid);
+      clearAllHookCaches();
+      resetWarmedHookScopes();
       await clearAllLocalData().catch(() => {});
       await signOut(auth).catch(() => {});
       applyTenantTheme(null);
@@ -1186,6 +1196,8 @@ export function useAuth() {
       } catch {
         // Ignore storage errors
       }
+      clearAllHookCaches();
+      resetWarmedHookScopes();
       await clearAllLocalData().catch(() => {});
       applyTenantTheme(null);
       logout();
@@ -1205,8 +1217,11 @@ export function useAuth() {
     const currentUid = useAuthStore.getState().user?.uid || auth.currentUser?.uid;
     try {
       clearCachedSession(currentUid);
+      clearAllHookCaches();
+      resetWarmedHookScopes();
       await signOut(auth);
       await clearAllLocalData();
+      applyTenantTheme(null);
       logout();
       toast.success('Logged out successfully');
     } catch (error) {

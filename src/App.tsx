@@ -5,7 +5,8 @@ import { Layout } from './components/layout/Layout';
 import { MasterConsoleLayout } from './components/master/MasterConsoleLayout';
 import { TierGate } from './components/shared/TierGate';
 import { PageContentSkeleton, WorkspaceBootSkeleton } from './components/shared/Skeletons';
-import { routeLoaders } from './utils/routePrefetch';
+import { routeLoaders, prefetchPermittedRoutes } from './utils/routePrefetch';
+import { warmPermittedHookCaches } from './utils/warmHookCache';
 import { useAuthStore } from './store/authStore';
 import { useThemeStore } from './store/themeStore';
 import { useAuthObserver } from './hooks/useAuth';
@@ -98,13 +99,33 @@ const MasterRoute = ({ children }: { children: React.ReactNode }) => {
 
 export default function App() {
   useAuthObserver();
-  const { user, tenant } = useAuthStore();
+  const { user, tenant, isMasterAdmin } = useAuthStore();
   const { resolvedTheme } = useThemeStore();
   usePlatformPlansSync(Boolean(user));
 
   React.useEffect(() => {
     applyTenantTheme(tenant);
   }, [tenant]);
+
+  React.useEffect(() => {
+    if (!user) return;
+    const runWarmup = () => {
+      prefetchPermittedRoutes(user, isMasterAdmin);
+      if (!isMasterAdmin) {
+        void warmPermittedHookCaches(tenant?.id, user);
+      }
+    };
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+      const id = w.requestIdleCallback(runWarmup, { timeout: 500 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(runWarmup, 120);
+    return () => window.clearTimeout(timer);
+  }, [user, tenant?.id, isMasterAdmin]);
 
   return (
     <Router>

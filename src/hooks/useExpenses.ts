@@ -8,13 +8,19 @@ import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
+import { canManageFinanceData, hasSectionAccess } from '../utils/rbac';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
 
 export function useExpenses() {
   const { tenant, user, activeBranchId } = useAuthStore();
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [expenses, setExpenses] = useState<Expense[]>(
+    () => getHookCache<Expense[]>('expenses', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('expenses', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -23,12 +29,14 @@ export function useExpenses() {
       return;
     }
 
-    setIsLoading(true);
+    setExpenses(getHookCache<Expense[]>('expenses', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('expenses', tenant.id));
     const subscription = liveQuery(() =>
       localDb.expenses.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('expenses', tenant.id, sorted);
         setExpenses(sorted);
         setIsLoading(false);
       },
@@ -47,6 +55,10 @@ export function useExpenses() {
     if (!tenant || !user) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing to record expenses.');
+      return;
+    }
+    if (!canManageFinanceData(user)) {
+      toast.error('Only finance, accountant, or admin staff can record expenses');
       return;
     }
     if (!expenseData.description.trim() || Number(expenseData.amount) <= 0) {
@@ -124,6 +136,10 @@ export function useExpenses() {
 
   const deleteExpense = async (expenseId: string) => {
     if (!tenant || !user) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
     if (user.role !== 'admin') {
       toast.error('Only business admins can delete expense records');
       return;
@@ -192,6 +208,10 @@ export function useExpenses() {
     if (!tenant || !user) return 0;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing to record expenses.');
+      return 0;
+    }
+    if (!canManageFinanceData(user) && !hasSectionAccess(user, 'bulk_import')) {
+      toast.error('You do not have permission to import expenses');
       return 0;
     }
 

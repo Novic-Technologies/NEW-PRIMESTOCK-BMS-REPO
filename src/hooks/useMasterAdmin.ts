@@ -48,6 +48,7 @@ import {
   sendTransactionalEmail,
   sendWhatsAppReminder,
 } from '../services/notificationService';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export interface OrgUsageMetric {
@@ -112,8 +113,12 @@ async function deleteCollectionInBatches(colPath: string): Promise<void> {
 
 export function useMasterAdmin() {
   const { user, tenant, isMasterAdmin } = useAuthStore();
-  const [organizations, setOrganizations] = useState<Tenant[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [organizations, setOrganizations] = useState<Tenant[]>(
+    () => (isMasterAdmin ? getHookCache<Tenant[]>('masterOrganizations', 'platform') ?? [] : [])
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (isMasterAdmin ? !hasHookCache('masterOrganizations', 'platform') : false)
+  );
   const [isActing, setIsActing] = useState(false);
 
   useEffect(() => {
@@ -123,12 +128,14 @@ export function useMasterAdmin() {
       return;
     }
 
-    setIsLoading(true);
+    setOrganizations(getHookCache<Tenant[]>('masterOrganizations', 'platform') ?? []);
+    setIsLoading(!hasHookCache('masterOrganizations', 'platform'));
     const q = query(collection(db, 'tenants'), orderBy('createdAt', 'desc'));
     const unsub = onSnapshot(
       q,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Tenant));
+        setHookCache('masterOrganizations', 'platform', list);
         setOrganizations(list);
         setIsLoading(false);
       },
@@ -1193,7 +1200,9 @@ export function useMasterAdmin() {
         localDb.tables.map((t) => t.where('tenantId').equals(target.id).delete().catch(() => {}))
       );
       try {
+        localStorage.removeItem(`primestock_held_carts_${target.id}`);
         localStorage.removeItem(`primestock_pos_held_carts_${target.id}`);
+        localStorage.removeItem(`primestock_dismissed_rem_${target.id}`);
       } catch {
         // Ignore storage errors
       }

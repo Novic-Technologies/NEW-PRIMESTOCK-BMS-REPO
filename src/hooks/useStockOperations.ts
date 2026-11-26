@@ -11,12 +11,17 @@ import { canAccessFeature } from '../utils/planLimits';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { canManageInventoryData } from '../utils/rbac';
 import { logWorkspaceAudit } from './useAuditLog';
+import { getHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function useStockOperations() {
   const { tenant, user, activeBranchId } = useAuthStore();
-  const [transfers, setTransfers] = useState<StockTransfer[]>([]);
-  const [adjustments, setAdjustments] = useState<StockAdjustment[]>([]);
+  const [transfers, setTransfers] = useState<StockTransfer[]>(
+    () => getHookCache<StockTransfer[]>('stockTransfers', tenant?.id) ?? []
+  );
+  const [adjustments, setAdjustments] = useState<StockAdjustment[]>(
+    () => getHookCache<StockAdjustment[]>('stockAdjustments', tenant?.id) ?? []
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -25,16 +30,27 @@ export function useStockOperations() {
       return;
     }
 
+    setTransfers(getHookCache<StockTransfer[]>('stockTransfers', tenant.id) ?? []);
+    setAdjustments(getHookCache<StockAdjustment[]>('stockAdjustments', tenant.id) ?? []);
+
     const subTransfers = liveQuery(() =>
       localDb.stockTransfers.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
-      next: (items) => setTransfers([...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt))),
+      next: (items) => {
+        const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('stockTransfers', tenant.id, sorted);
+        setTransfers(sorted);
+      },
     });
 
     const subAdjustments = liveQuery(() =>
       localDb.stockAdjustments.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
-      next: (items) => setAdjustments([...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt))),
+      next: (items) => {
+        const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('stockAdjustments', tenant.id, sorted);
+        setAdjustments(sorted);
+      },
     });
 
     return () => {
@@ -304,6 +320,14 @@ export function useStockOperations() {
 
   const cancelInTransitTransfer = async (transferId: string) => {
     if (!tenant || !user) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!canAccessFeature(tenant, 'multiBranchTransfers')) {
+      toast.error('Inter-branch stock transfers require Business Growth or Enterprise plan.');
+      return;
+    }
     if (!canManageInventoryData(user)) {
       toast.error('Only inventory staff, managers, or admins can cancel transfers');
       return;

@@ -1,4 +1,7 @@
-// Centralized lazy route loaders so App.tsx and Sidebar hover/focus prefetch share exact chunks.
+import { AppSection, User } from '../types';
+import { ALL_SECTIONS, hasSectionAccess } from './rbac';
+
+// Centralized lazy route loaders so App.tsx and Sidebar hover/focus/idle prefetch share exact chunks.
 export const routeLoaders = {
   login: () => import('../pages/auth/Login'),
   dashboard: () => import('../pages/dashboard/Dashboard'),
@@ -60,4 +63,36 @@ export function prefetchRoute(path: string): void {
   loader().catch(() => {
     prefetchedPaths.delete(path);
   });
+}
+
+const SECTION_PATH_MAP: Record<AppSection, string> = ALL_SECTIONS.reduce(
+  (acc, item) => {
+    acc[item.id] = item.path;
+    return acc;
+  },
+  {} as Record<AppSection, string>
+);
+
+export function prefetchPermittedRoutes(
+  user: User | null | undefined,
+  isMasterAdmin = false
+): void {
+  if (!user) return;
+  if (isMasterAdmin) {
+    [
+      '/master',
+      '/master/monitoring',
+      '/master/approvals',
+      '/master/plans',
+      '/master/payments',
+      '/master/system',
+    ].forEach(prefetchRoute);
+    return;
+  }
+
+  for (const section of Object.keys(SECTION_PATH_MAP) as AppSection[]) {
+    if (hasSectionAccess(user, section)) {
+      prefetchRoute(SECTION_PATH_MAP[section]);
+    }
+  }
 }

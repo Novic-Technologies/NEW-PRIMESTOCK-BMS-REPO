@@ -8,13 +8,19 @@ import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
+import { hasSectionAccess } from '../utils/rbac';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
 
 export function useCustomers() {
   const { tenant, user } = useAuthStore();
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [customers, setCustomers] = useState<Customer[]>(
+    () => getHookCache<Customer[]>('customers', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('customers', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -23,12 +29,14 @@ export function useCustomers() {
       return;
     }
 
-    setIsLoading(true);
+    setCustomers(getHookCache<Customer[]>('customers', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('customers', tenant.id));
     const subscription = liveQuery(() =>
       localDb.customers.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('customers', tenant.id, sorted);
         setCustomers(sorted);
         setIsLoading(false);
       },
@@ -44,9 +52,18 @@ export function useCustomers() {
   const addCustomer = async (
     customerData: Omit<Customer, 'id' | 'tenantId' | 'createdAt' | 'loyaltyPoints' | 'currentBalance'>
   ) => {
-    if (!tenant) return;
+    if (!tenant || !user) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (
+      !hasSectionAccess(user, 'customers') &&
+      !hasSectionAccess(user, 'pos') &&
+      !hasSectionAccess(user, 'sales') &&
+      !hasSectionAccess(user, 'bulk_import')
+    ) {
+      toast.error('You do not have permission to add customers');
       return;
     }
     const phone = (customerData.phone || '').trim();
@@ -134,9 +151,17 @@ export function useCustomers() {
   };
 
   const updateCustomer = async (customerId: string, updates: Partial<Customer>) => {
-    if (!tenant) return;
+    if (!tenant || !user) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (
+      !hasSectionAccess(user, 'customers') &&
+      !hasSectionAccess(user, 'pos') &&
+      !hasSectionAccess(user, 'sales')
+    ) {
+      toast.error('You do not have permission to update customers');
       return;
     }
     if (updates.phone !== undefined && updates.phone.trim().length < 10) {
@@ -222,6 +247,10 @@ export function useCustomers() {
 
   const deleteCustomer = async (customerId: string) => {
     if (!tenant || !user) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
     if (user.role !== 'admin') {
       toast.error('Only business admins can delete customers');
       return;
@@ -288,9 +317,13 @@ export function useCustomers() {
       loyaltyPoints?: number;
     }>
   ): Promise<number> => {
-    if (!tenant) return 0;
+    if (!tenant || !user) return 0;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return 0;
+    }
+    if (!hasSectionAccess(user, 'customers') && !hasSectionAccess(user, 'bulk_import')) {
+      toast.error('You do not have permission to import customers');
       return 0;
     }
 

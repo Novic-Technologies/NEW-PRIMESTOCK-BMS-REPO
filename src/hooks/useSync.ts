@@ -256,12 +256,17 @@ export function useSync() {
     let settledCount = 0;
     const totalListeners = activeCollections.length;
     const firstSnapshotDone = new Set<string>();
+    const settleFallbackTimer = window.setTimeout(() => {
+      setLastSyncedAt(Date.now());
+      setStatus('synced');
+    }, 1500);
 
     const markListenerReady = (key: string) => {
       if (!firstSnapshotDone.has(key)) {
         firstSnapshotDone.add(key);
         settledCount++;
         if (settledCount >= totalListeners) {
+          window.clearTimeout(settleFallbackTimer);
           setLastSyncedAt(Date.now());
           setStatus('synced');
         }
@@ -422,6 +427,7 @@ export function useSync() {
       .catch(() => {});
 
     return () => {
+      window.clearTimeout(settleFallbackTimer);
       unsubscribers.forEach((unsub) => unsub());
       unsubMembers();
       unsubTenant();

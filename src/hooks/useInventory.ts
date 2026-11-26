@@ -12,12 +12,17 @@ import { getEffectivePlanQuota, isQuotaExceeded } from '../utils/planLimits';
 import { canManageInventoryData } from '../utils/rbac';
 import { getNextExpiringBatch, getTotalBatchStock } from '../utils/inventoryMath';
 import { logWorkspaceAudit } from './useAuditLog';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function useInventory() {
   const { tenant, user, activeBranchId } = useAuthStore();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [products, setProducts] = useState<Product[]>(
+    () => getHookCache<Product[]>('products', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('products', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -26,12 +31,14 @@ export function useInventory() {
       return;
     }
 
-    setIsLoading(true);
+    setProducts(getHookCache<Product[]>('products', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('products', tenant.id));
     const subscription = liveQuery(() =>
       localDb.products.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('products', tenant.id, sorted);
         setProducts(sorted);
         setIsLoading(false);
       },
@@ -272,6 +279,10 @@ export function useInventory() {
       toast.error('Your trial has expired. Upgrade in Billing to edit inventory.');
       return;
     }
+    if (!canManageInventoryData(user)) {
+      toast.error('Only inventory staff, managers, or admins can update products');
+      return;
+    }
     try {
       const existing = await localDb.products.get(productId);
       if (!existing) return;
@@ -349,6 +360,10 @@ export function useInventory() {
 
   const deleteProduct = async (productId: string) => {
     if (!tenant || !user) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
     if (user.role !== 'admin') {
       toast.error('Only business admins can delete products');
       return;

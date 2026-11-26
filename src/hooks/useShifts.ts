@@ -9,12 +9,18 @@ import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
 import { logWorkspaceAudit } from './useAuditLog';
+import { hasSectionAccess } from '../utils/rbac';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function useShifts() {
   const { tenant, user, activeBranchId } = useAuthStore();
-  const [shifts, setShifts] = useState<RegisterShift[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [shifts, setShifts] = useState<RegisterShift[]>(
+    () => getHookCache<RegisterShift[]>('shifts', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('shifts', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -23,12 +29,14 @@ export function useShifts() {
       return;
     }
 
-    setIsLoading(true);
+    setShifts(getHookCache<RegisterShift[]>('shifts', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('shifts', tenant.id));
     const sub = liveQuery(() =>
       localDb.shifts.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.openedAt.localeCompare(a.openedAt));
+        setHookCache('shifts', tenant.id, sorted);
         setShifts(sorted);
         setIsLoading(false);
       },
@@ -93,6 +101,10 @@ export function useShifts() {
     if (!tenant || !user) return;
     if (computeTrialState(tenant).isSoftLocked) {
       toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (!hasSectionAccess(user, 'shifts') && !hasSectionAccess(user, 'pos')) {
+      toast.error('You do not have permission to open register shifts');
       return;
     }
     if (activeShift) {
@@ -176,6 +188,18 @@ export function useShifts() {
 
   const closeShift = async (shiftId: string, closingCash: number, notes?: string) => {
     if (!tenant || !user) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
+    if (
+      !hasSectionAccess(user, 'shifts') &&
+      !hasSectionAccess(user, 'pos') &&
+      !['admin', 'manager'].includes(user.role)
+    ) {
+      toast.error('You do not have permission to close register shifts');
+      return;
+    }
     const shift = await localDb.shifts.get(shiftId);
     if (!shift) return;
 

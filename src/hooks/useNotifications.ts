@@ -89,12 +89,30 @@ export function useNotifications({
   );
 
   const autoSweepRanRef = useRef<string>('');
+  const mountTimeIsoRef = useRef<string>(new Date().toISOString());
 
   useEffect(() => {
     setLocalReadIds(readKey ? readLocalSet(readKey) : new Set<string>());
     setLocalDeletedIds(deletedKey ? readLocalSet(deletedKey) : new Set<string>());
     setSeenBadgeIds(seenBadgeKey ? readLocalSet(seenBadgeKey) : new Set<string>());
   }, [readKey, deletedKey, seenBadgeKey]);
+
+  useEffect(() => {
+    const handleBannerDismiss = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ tenantId?: string; reminderAt?: string }>).detail;
+      if (!tenantId || detail?.tenantId !== tenantId) return;
+      const remId = `sys_rem_${detail.reminderAt || 'latest'}`;
+      setLocalDeletedIds((prev) => {
+        if (prev.has(remId)) return prev;
+        const next = new Set<string>(prev);
+        next.add(remId);
+        if (deletedKey) writeLocalSet(deletedKey, next);
+        return next;
+      });
+    };
+    window.addEventListener('primestock-reminder-dismissed', handleBannerDismiss);
+    return () => window.removeEventListener('primestock-reminder-dismissed', handleBannerDismiss);
+  }, [tenantId, deletedKey]);
 
   // Listen to persisted Firestore notifications (capped to 50 most recent for speed)
   useEffect(() => {
@@ -251,11 +269,19 @@ export function useNotifications({
       });
     });
 
-    const nowIso = new Date().toISOString();
+    const nowIso = mountTimeIsoRef.current;
 
     if (tenant?.lastReminderMessage) {
       const id = `sys_rem_${tenant.lastReminderAt || 'latest'}`;
-      if (!localDeletedIds.has(id)) {
+      let bannerDismissed = false;
+      try {
+        bannerDismissed =
+          Boolean(tenant.lastReminderAt) &&
+          localStorage.getItem(`primestock_dismissed_rem_${tenant.id}`) === tenant.lastReminderAt;
+      } catch {
+        bannerDismissed = false;
+      }
+      if (!bannerDismissed && !localDeletedIds.has(id)) {
         combined.push({
           id,
           title: 'Subscription Reminder',
@@ -271,7 +297,7 @@ export function useNotifications({
     }
 
     if (pendingCount > 0) {
-      const id = `sys_sync_${pendingCount}`;
+      const id = 'sys_sync_queue';
       if (!localDeletedIds.has(id)) {
         combined.push({
           id,

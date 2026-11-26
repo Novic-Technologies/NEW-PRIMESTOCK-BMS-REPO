@@ -38,13 +38,21 @@ import {
 } from '../utils/rbac';
 import { buildSubscriptionEmailHtml, sendTransactionalEmail } from '../services/notificationService';
 import { logWorkspaceAudit } from './useAuditLog';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
 
 export function useTeam() {
   const { tenant, user } = useAuthStore();
-  const [members, setMembers] = useState<TenantMember[]>([]);
-  const [invites, setInvites] = useState<StaffInvite[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const inviteScope = tenant && user ? `${tenant.id}:${user.uid}` : undefined;
+  const [members, setMembers] = useState<TenantMember[]>(
+    () => getHookCache<TenantMember[]>('members', tenant?.id) ?? []
+  );
+  const [invites, setInvites] = useState<StaffInvite[]>(
+    () => getHookCache<StaffInvite[]>('invites', inviteScope) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('members', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant || !user) {
@@ -54,13 +62,18 @@ export function useTeam() {
       return;
     }
 
-    setIsLoading(true);
+    const currentInviteScope = `${tenant.id}:${user.uid}`;
+    setMembers(getHookCache<TenantMember[]>('members', tenant.id) ?? []);
+    setInvites(getHookCache<StaffInvite[]>('invites', currentInviteScope) ?? []);
+    setIsLoading(!hasHookCache('members', tenant.id));
+
     const dexieSub = liveQuery(() =>
       localDb.members.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         if (items.length > 0) {
           const sorted = [...items].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+          setHookCache('members', tenant.id, sorted);
           setMembers(sorted);
           setIsLoading(false);
         }
@@ -76,6 +89,7 @@ export function useTeam() {
         if (list.length > 0) {
           await localDb.members.bulkPut(list);
         }
+        setHookCache('members', tenant.id, list);
         setMembers(list);
         setIsLoading(false);
       },
@@ -100,6 +114,7 @@ export function useTeam() {
           .map((d) => d.data() as StaffInvite)
           .filter((inv) => inv.tenantId === tenant.id);
         list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('invites', currentInviteScope, list);
         setInvites(list);
       },
       (error) => {
@@ -497,7 +512,11 @@ export function useTeam() {
   };
 
   const revokeInvite = async (inviteId: string) => {
-    if (!user || user.role !== 'admin') return;
+    if (!tenant || !user || user.role !== 'admin') return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your subscription is paused. Renew in Billing first.');
+      return;
+    }
     const targetInvite = invites.find((i) => i.id === inviteId);
     try {
       await deleteDoc(doc(db, 'staffInvites', inviteId));
@@ -547,6 +566,10 @@ export function useTeam() {
   ) => {
     if (!tenant || !user || user.role !== 'admin') {
       toast.error('Only admins can modify staff profiles or roles');
+      return;
+    }
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your subscription is paused. Renew in Billing to modify staff profiles.');
       return;
     }
     if (memberUid === user.uid && updates.role && updates.role !== 'admin') {
@@ -704,6 +727,10 @@ export function useTeam() {
   const removeInactiveMember = async (memberUid: string): Promise<boolean> => {
     if (!tenant || !user || user.role !== 'admin') {
       toast.error('Only business admins can remove staff members');
+      return false;
+    }
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your subscription is paused. Renew in Billing first.');
       return false;
     }
     if (memberUid === user.uid) {

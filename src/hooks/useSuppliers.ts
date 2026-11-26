@@ -9,13 +9,19 @@ import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
 import { computeTrialState } from '../utils/trialUtils';
 import { canAccessFeature } from '../utils/planLimits';
+import { canManageInventoryData, hasSectionAccess } from '../utils/rbac';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import { logWorkspaceAudit } from './useAuditLog';
 import toast from 'react-hot-toast';
 
 export function useSuppliers() {
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [loading, setLoading] = useState(true);
   const { user, tenant } = useAuthStore();
+  const [suppliers, setSuppliers] = useState<Supplier[]>(
+    () => getHookCache<Supplier[]>('suppliers', user?.tenantId) ?? []
+  );
+  const [loading, setLoading] = useState<boolean>(
+    () => (user?.tenantId ? !hasHookCache('suppliers', user.tenantId) : false)
+  );
 
   useEffect(() => {
     if (!user?.tenantId) {
@@ -24,12 +30,14 @@ export function useSuppliers() {
       return;
     }
 
-    setLoading(true);
+    setSuppliers(getHookCache<Supplier[]>('suppliers', user.tenantId) ?? []);
+    setLoading(!hasHookCache('suppliers', user.tenantId));
     const subscription = liveQuery(() =>
       localDb.suppliers.where('tenantId').equals(user.tenantId).toArray()
     ).subscribe({
       next: (data) => {
         const sorted = [...data].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('suppliers', user.tenantId, sorted);
         setSuppliers(sorted);
         setLoading(false);
       },
@@ -50,6 +58,10 @@ export function useSuppliers() {
     }
     if (!canAccessFeature(tenant, 'suppliersAndPOs')) {
       toast.error('Suppliers & Payables require Starter plan or higher. Upgrade in Billing.');
+      return;
+    }
+    if (!canManageInventoryData(user) && !hasSectionAccess(user, 'suppliers')) {
+      toast.error('You do not have permission to add suppliers');
       return;
     }
     const phone = (supplierData.phone || '').trim();
@@ -144,6 +156,10 @@ export function useSuppliers() {
       toast.error('Suppliers & Payables require Starter plan or higher. Upgrade in Billing.');
       return;
     }
+    if (!canManageInventoryData(user) && !hasSectionAccess(user, 'suppliers')) {
+      toast.error('You do not have permission to update suppliers');
+      return;
+    }
     if (updates.phone !== undefined && updates.phone.trim().length < 10) {
       toast.error('Phone number must be at least 10 digits');
       return;
@@ -226,6 +242,10 @@ export function useSuppliers() {
 
   const deleteSupplier = async (supplierId: string) => {
     if (!user?.tenantId) return;
+    if (computeTrialState(tenant).isSoftLocked) {
+      toast.error('Your trial has expired. Upgrade in Billing first.');
+      return;
+    }
     if (user.role !== 'admin') {
       toast.error('Only business admins can delete suppliers');
       return;
@@ -299,6 +319,14 @@ export function useSuppliers() {
     }
     if (!canAccessFeature(tenant, 'suppliersAndPOs')) {
       toast.error('Suppliers & Payables require Starter plan or higher. Upgrade in Billing.');
+      return 0;
+    }
+    if (
+      !canManageInventoryData(user) &&
+      !hasSectionAccess(user, 'suppliers') &&
+      !hasSectionAccess(user, 'bulk_import')
+    ) {
+      toast.error('You do not have permission to import suppliers');
       return 0;
     }
 

@@ -1,21 +1,21 @@
 import 'dotenv/config';
-import express, { Request, Response, NextFunction } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Schema, ThinkingLevel, Type } from '@google/genai';
+import { GoogleGenAI, type Schema, ThinkingLevel, Type } from '@google/genai';
 import ExcelJS from 'exceljs';
 import mammoth from 'mammoth';
 import { extractTextItems } from 'unpdf';
 import nodemailer from 'nodemailer';
 import { initializeApp, getApps } from 'firebase-admin/app';
-import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
+import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 import {
   ENTITY_TARGET_FIELDS,
   SERVER_REQUIRED_FIELDS,
-  SmartEntityType,
-  PdfExtractedTable,
+  type SmartEntityType,
+  type PdfExtractedTable,
   normalizeLookupKey,
   normalizeServerHeader,
   sanitizeExtractedRow,
@@ -26,7 +26,7 @@ import {
   extractPdfTablesWithCoordinates,
   selectBestPdfTable,
   reconstructPdfStructuredText,
-} from './server/smartImportPdf';
+} from './server/smartImportPdf.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

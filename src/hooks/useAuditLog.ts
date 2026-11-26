@@ -6,6 +6,7 @@ import { localDb } from '../services/db';
 import { useAuthStore } from '../store/authStore';
 import { AuditLog } from '../types';
 import { stripUndefined } from '../utils/firestoreUtils';
+import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 
 export async function logWorkspaceAudit(params: {
   tenantId: string;
@@ -64,8 +65,12 @@ export async function logWorkspaceAudit(params: {
 
 export function useAuditLog() {
   const { tenant, user, activeBranchId } = useAuthStore();
-  const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [logs, setLogs] = useState<AuditLog[]>(
+    () => getHookCache<AuditLog[]>('auditLogs', tenant?.id) ?? []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (tenant?.id ? !hasHookCache('auditLogs', tenant.id) : false)
+  );
 
   useEffect(() => {
     if (!tenant) {
@@ -74,12 +79,14 @@ export function useAuditLog() {
       return;
     }
 
-    setIsLoading(true);
+    setLogs(getHookCache<AuditLog[]>('auditLogs', tenant.id) ?? []);
+    setIsLoading(!hasHookCache('auditLogs', tenant.id));
     const sub = liveQuery(() =>
       localDb.auditLogs.where('tenantId').equals(tenant.id).toArray()
     ).subscribe({
       next: (items) => {
         const sorted = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setHookCache('auditLogs', tenant.id, sorted);
         setLogs(sorted);
         setIsLoading(false);
       },
