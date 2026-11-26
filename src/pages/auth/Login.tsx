@@ -221,7 +221,7 @@ export default function Login() {
       <div className="hidden lg:flex lg:w-1/2 bg-[#0B1F3A] border-r border-white/10 p-12 xl:p-16 flex-col justify-between relative overflow-hidden">
         <div className="relative z-10 flex items-center justify-between text-xs font-semibold tracking-wider uppercase text-slate-300/80">
           <span>PRIMESTOCK BMS UG</span>
-          <span>Uganda Business Platform</span>
+          <span>primestockug.com</span>
         </div>
 
         <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-center max-w-lg mx-auto py-8">
@@ -685,7 +685,8 @@ export default function Login() {
                 <>
                   <p>
                     <strong className="text-primary">1. Scope of Service:</strong> PrimeStock BMS
-                    (operated by Novic Technologies) provides multi-tenant inventory, point-of-sale,
+                    (hosted at <strong className="text-primary">primestockug.com</strong> and
+                    operated by Novic Technologies) provides multi-tenant inventory, point-of-sale,
                     accounting, payroll, and URA EFRIS readiness software for merchants in Uganda
                     and East Africa.
                   </p>

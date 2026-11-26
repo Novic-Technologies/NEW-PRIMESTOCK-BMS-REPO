@@ -37,6 +37,7 @@ import {
   ROLE_META,
 } from '../utils/rbac';
 import { buildSubscriptionEmailHtml, sendTransactionalEmail } from '../services/notificationService';
+import { buildCanonicalAppUrl } from '../utils/domain';
 import { logWorkspaceAudit } from './useAuditLog';
 import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
@@ -269,7 +270,7 @@ export function useTeam() {
         summary: `Invited ${cleanName} (${emailCheck.cleanEmail}) as ${ROLE_META[params.role].label}`,
       });
 
-      const loginUrl = typeof window !== 'undefined' ? `${window.location.origin}/login` : '';
+      const loginUrl = buildCanonicalAppUrl('/login');
       const roleLabel = ROLE_META[params.role].label;
       const inviteEmailText = `Hello ${cleanName},\n\n${user.name} has invited you to join ${tenant.name} on PrimeStock BMS as ${roleLabel}.\n\nSign in or create your account at ${loginUrl} using this exact email address (${emailCheck.cleanEmail}) to activate your account.`;
 
@@ -468,7 +469,7 @@ export function useTeam() {
         summary: `Created ${ROLE_META[params.role].label} account for ${cleanName} (${emailCheck.cleanEmail})`,
       });
 
-      const loginUrl = typeof window !== 'undefined' ? `${window.location.origin}/login` : '';
+      const loginUrl = buildCanonicalAppUrl('/login');
       const roleLabel = ROLE_META[params.role].label;
       void sendTransactionalEmail({
         to: emailCheck.cleanEmail,

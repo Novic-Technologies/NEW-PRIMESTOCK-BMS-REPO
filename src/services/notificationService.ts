@@ -1,4 +1,5 @@
 import { auth } from '../firebase';
+import { buildCanonicalAppUrl, CANONICAL_DOMAIN, CANONICAL_ORIGIN } from '../utils/domain';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const currentUser = auth.currentUser;
@@ -117,7 +118,7 @@ export function buildSubscriptionEmailHtml(params: {
   actionLabel?: string;
   actionUrl?: string;
 }): string {
-  const safeUrl = params.actionUrl || (typeof window !== 'undefined' ? `${window.location.origin}/billing` : '');
+  const safeUrl = params.actionUrl || buildCanonicalAppUrl('/billing');
   const safeActionLabel = params.actionLabel || 'Open Billing & Renew';
 
   return `
@@ -144,8 +145,8 @@ export function buildSubscriptionEmailHtml(params: {
               : ''
           }
         </div>
-        <div style="background:#f8fafc; border-top:1px solid #e2e8f0; padding:14px 24px; font-size:11px; color:#64748b; text-align:center;">
-          Built &amp; managed by Novic Technologies · PrimeStock BMS UG
+        <div style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:14px 24px;font-size:11px;color:#64748b;text-align:center;">
+          <a href="${CANONICAL_ORIGIN}" style="color:#0F766E;text-decoration:none;font-weight:600;">${CANONICAL_DOMAIN}</a> · Built &amp; managed by Novic Technologies
         </div>
       </div>
     </div>

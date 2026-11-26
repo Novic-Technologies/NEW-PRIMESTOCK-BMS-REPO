@@ -20,6 +20,8 @@ export default defineConfig(() => {
           'pwa-192x192.png',
           'pwa-512x512.png',
           'pwa-maskable-512x512.png',
+          'robots.txt',
+          'sitemap.xml',
         ],
         manifest: {
           name: 'PRIMESTOCK BMS UG',
@@ -62,7 +64,7 @@ export default defineConfig(() => {
           navigateFallbackDenylist: [
             /^\/api\//,
             /^\/assets\//,
-            /\.(?:pdf|png|jpg|jpeg|svg|webp|ico|css|js|woff2?|webmanifest)$/i,
+            /\.(?:pdf|png|jpg|jpeg|svg|webp|ico|css|js|woff2?|webmanifest|txt|xml)$/i,
           ],
           runtimeCaching: [
             {

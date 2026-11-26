@@ -1,8 +1,21 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.primestockug.com"
+        }
+      ],
+      "destination": "https://primestockug.com/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|robots\\.txt|sitemap\\.xml).*)",
       "destination": "/index.html"
     }
   ],

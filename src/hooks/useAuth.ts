@@ -44,6 +44,7 @@ import { buildSubscriptionEmailHtml, sendTransactionalEmail } from '../services/
 import { logWorkspaceAudit } from './useAuditLog';
 import { clearAllHookCaches } from '../utils/hookCache';
 import { resetWarmedHookScopes } from '../utils/warmHookCache';
+import { buildCanonicalAppUrl } from '../utils/domain';
 import toast from 'react-hot-toast';
 
 interface PendingSignupInfo {
@@ -707,12 +708,11 @@ async function syncAuthenticatedUser(
       );
 
       if (firebaseUser.email) {
+        const loginUrl = buildCanonicalAppUrl('/login');
         sendTransactionalEmail({
           to: firebaseUser.email,
           subject: `Welcome to PrimeStock Business Management System (${trialDays}-Day Free Trial)`,
-          text: `${welcomeMsg}\n\nWorkspace URL: ${
-            typeof window !== 'undefined' ? window.location.origin : ''
-          }`,
+          text: `${welcomeMsg}\n\nWorkspace URL: ${loginUrl}`,
           html: buildSubscriptionEmailHtml({
             businessName: hasExplicitBusinessName
               ? businessName
@@ -722,8 +722,7 @@ async function syncAuthenticatedUser(
             planLabel: `${defaultQuota.name} (${trialDays}-Day Free Trial)`,
             expiryLabel: formatDate(newTenant.trialEndsAt),
             actionLabel: 'Sign In to Workspace',
-            actionUrl:
-              typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined,
+            actionUrl: loginUrl,
           }),
         }).catch(() => {});
       }

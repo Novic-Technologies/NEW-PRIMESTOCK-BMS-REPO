@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Allow: /login
+Disallow: /api/
+Disallow: /master/
+
+Sitemap: https://primestockug.com/sitemap.xml

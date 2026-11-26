@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { Layout } from './components/layout/Layout';
 import { MasterConsoleLayout } from './components/master/MasterConsoleLayout';
@@ -12,6 +12,7 @@ import { useThemeStore } from './store/themeStore';
 import { useAuthObserver } from './hooks/useAuth';
 import { usePlatformPlansSync } from './utils/platformPlans';
 import { applyTenantTheme } from './utils/branding';
+import { getCanonicalPageUrl } from './utils/domain';
 import { getDefaultRouteForUser, hasSectionAccess } from './utils/rbac';
 import { AppSection } from './types';
 
@@ -98,6 +99,20 @@ const MasterRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
+function CanonicalHeadSync() {
+  const { pathname } = useLocation();
+  React.useEffect(() => {
+    const url = getCanonicalPageUrl(pathname);
+    const canonicalEl = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    if (canonicalEl) canonicalEl.href = url;
+    const ogUrl = document.querySelector<HTMLMetaElement>('meta[property="og:url"]');
+    if (ogUrl) ogUrl.content = url;
+    const twitterUrl = document.querySelector<HTMLMetaElement>('meta[name="twitter:url"]');
+    if (twitterUrl) twitterUrl.content = url;
+  }, [pathname]);
+  return null;
+}
+
 export default function App() {
   useAuthObserver();
   const { user, tenant, isMasterAdmin } = useAuthStore();
@@ -130,6 +145,7 @@ export default function App() {
 
   return (
     <Router>
+      <CanonicalHeadSync />
       <Toaster
         position="top-right"
         toastOptions={{

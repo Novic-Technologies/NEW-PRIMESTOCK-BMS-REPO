@@ -33,6 +33,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
+const CANONICAL_DOMAIN = 'primestockug.com';
+const CANONICAL_APP_URL = 'https://primestockug.com';
+const PUBLIC_APP_URL = (() => {
+  const raw = (process.env.PUBLIC_APP_URL || process.env.APP_URL || '').trim();
+  if (!raw || raw === 'MY_APP_URL' || raw.includes('.run.app')) {
+    return CANONICAL_APP_URL;
+  }
+  return raw.replace(/\/+$/, '');
+})();
 const MODEL_NAME = 'gemini-4-hydrogen';
 const FALLBACK_MODEL_NAME = 'gemini-3.1-flash-lite';
 
@@ -498,7 +507,13 @@ function formatAiError(error: unknown): { status: number; message: string } {
 async function startServer() {
   const app = express();
   app.disable('x-powered-by');
-  app.use((_req: Request, res: Response, next: NextFunction) => {
+  app.set('trust proxy', true);
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const host = (req.hostname || '').toLowerCase();
+    if (host === `www.${CANONICAL_DOMAIN}`) {
+      res.redirect(301, `${CANONICAL_APP_URL}${req.originalUrl}`);
+      return;
+    }
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self)');
@@ -508,7 +523,13 @@ async function startServer() {
   app.use(express.json({ limit: '20mb' }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, model: MODEL_NAME, fallbackModel: FALLBACK_MODEL_NAME });
+    res.json({
+      ok: true,
+      domain: CANONICAL_DOMAIN,
+      publicUrl: PUBLIC_APP_URL,
+      model: MODEL_NAME,
+      fallbackModel: FALLBACK_MODEL_NAME,
+    });
   });
 
   app.get('/api/ai/usage', requireFirebaseAuth, async (req: AuthedRequest, res: Response) => {
@@ -2359,6 +2380,10 @@ async function startServer() {
             email: payerEmail,
             phone_number: normalizedMsisdn,
             fullname: customerName || req.authUser?.name || payerEmail,
+            redirect_url: `${PUBLIC_APP_URL}/billing`,
+            meta: {
+              source_domain: CANONICAL_DOMAIN,
+            },
           }),
         });
 
@@ -2841,7 +2866,7 @@ async function startServer() {
     const fromAddress =
       process.env.SMTP_FROM?.trim() ||
       process.env.RESEND_FROM?.trim() ||
-      (smtpUser ? `PrimeStock BMS UG <${smtpUser}>` : 'PrimeStock BMS UG <onboarding@resend.dev>');
+      (smtpUser ? `PrimeStock BMS UG <${smtpUser}>` : `PrimeStock BMS UG <noreply@${CANONICAL_DOMAIN}>`);
 
     if (resendApiKey) {
       return {
@@ -3074,7 +3099,7 @@ async function startServer() {
       }
 
       const subject = 'PrimeStock BMS UG — Email Service Verification Test';
-      const text = `Your PrimeStock BMS email service (${emailCfg.provider.toUpperCase()} via ${emailCfg.host}) is configured and delivering messages cleanly.\n\nSent to: ${targetTo}\nSender: ${emailCfg.fromAddress}`;
+      const text = `Your PrimeStock BMS email service (${emailCfg.provider.toUpperCase()} via ${emailCfg.host}) is configured and delivering messages cleanly.\n\nSent to: ${targetTo}\nSender: ${emailCfg.fromAddress}\nPortal: ${PUBLIC_APP_URL}`;
       const html = `
         <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;padding:24px;color:#0f172a;">
           <div style="max-width:540px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
@@ -3089,10 +3114,14 @@ async function startServer() {
               <div style="background:#f1f5f9;border-radius:10px;padding:12px 14px;font-size:13px;">
                 <div><strong>Provider:</strong> ${emailCfg.provider.toUpperCase()} (${emailCfg.host})</div>
                 <div style="margin-top:4px;"><strong>From:</strong> ${emailCfg.fromAddress}</div>
+                <div style="margin-top:4px;"><strong>Domain:</strong> ${CANONICAL_DOMAIN}</div>
+              </div>
+              <div style="margin-top:16px;">
+                <a href="${PUBLIC_APP_URL}" style="display:inline-block;background:#0F766E;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;padding:10px 18px;border-radius:8px;">Open ${CANONICAL_DOMAIN}</a>
               </div>
             </div>
             <div style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:12px 22px;font-size:11px;color:#64748b;text-align:center;">
-              Built &amp; managed by Novic Technologies
+              <a href="${PUBLIC_APP_URL}" style="color:#0F766E;text-decoration:none;font-weight:600;">${CANONICAL_DOMAIN}</a> · Built &amp; managed by Novic Technologies
             </div>
           </div>
         </div>
@@ -3878,6 +3907,8 @@ async function startServer() {
         expiryDateStr: string
       ) => {
         if (!emailCfg.configured || !to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return false;
+        const billingActionUrl = `${PUBLIC_APP_URL}/billing`;
+        const emailTextWithUrl = `${text}\n\nManage Billing: ${billingActionUrl}`;
         const html = `
           <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;padding:24px;color:#0f172a;">
             <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
@@ -3888,12 +3919,13 @@ async function startServer() {
               <div style="padding:22px;">
                 <h2 style="margin:0 0 10px 0;font-size:18px;color:#0B1F3A;">${escapeHtmlText(headline)}</h2>
                 <p style="margin:0 0 14px 0;font-size:14px;line-height:1.6;color:#334155;">${escapeHtmlText(text)}</p>
-                <div style="background:#f1f5f9;border-radius:10px;padding:12px 14px;font-size:12px;color:#334155;">
+                <div style="background:#f1f5f9;border-radius:10px;padding:12px 14px;font-size:12px;color:#334155;margin-bottom:16px;">
                   <div><strong>Effective / Expiry Date:</strong> ${escapeHtmlText(expiryDateStr)}</div>
                 </div>
+                <a href="${billingActionUrl}" style="display:inline-block;background:#0F766E;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;padding:11px 20px;border-radius:8px;">Open Billing &amp; Renew</a>
               </div>
               <div style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:12px 22px;font-size:11px;color:#64748b;text-align:center;">
-                Built &amp; managed by Novic Technologies
+                <a href="${PUBLIC_APP_URL}" style="color:#0F766E;text-decoration:none;font-weight:600;">${CANONICAL_DOMAIN}</a> · Built &amp; managed by Novic Technologies
               </div>
             </div>
           </div>
@@ -3906,12 +3938,12 @@ async function startServer() {
               Authorization: `Bearer ${emailCfg.resendApiKey}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ from: emailCfg.fromAddress, to: [to], subject, text, html }),
+            body: JSON.stringify({ from: emailCfg.fromAddress, to: [to], subject, text: emailTextWithUrl, html }),
           });
           return r.ok;
         }
         if (transporter) {
-          await transporter.sendMail({ from: emailCfg.fromAddress, to, subject, text, html });
+          await transporter.sendMail({ from: emailCfg.fromAddress, to, subject, text: emailTextWithUrl, html });
           return true;
         }
         return false;

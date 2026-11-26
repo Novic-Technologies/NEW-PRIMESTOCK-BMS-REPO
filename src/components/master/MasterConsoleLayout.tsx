@@ -219,7 +219,7 @@ export function MasterConsoleLayout() {
             <span className={cn(isMinimized && 'lg:hidden')}>Sign Out</span>
           </button>
           <p className={cn('text-[10px] text-white/45 text-center', isMinimized && 'lg:hidden')}>
-            Novic Technologies · System Control
+            primestockug.com · Novic Technologies
           </p>
         </div>
       </aside>

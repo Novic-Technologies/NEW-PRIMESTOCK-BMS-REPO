@@ -9,9 +9,8 @@ endobj
 << /Type /Pages /Kids [5 0 R 7 0 R] /Count 2 >>
 endobj
 4 0 obj
-<< /Length 1840 >>
+<< /Length 1862 >>
 stream
-BT
 /F2 20 Tf
 1 0 0 1 54 745 Tm
 (PRIMESTOCK BMS UG) Tj
@@ -20,7 +19,7 @@ BT
 (Enterprise Multi-Tenant Business Management & URA Compliance System) Tj
 /F1 10 Tf
 1 0 0 1 54 705 Tm
-(Complete System Manual, Feature Reference & Role Guide) Tj
+(Complete System Manual, Feature Reference & Role Guide | https://primestockug.com) Tj
 /F2 14 Tf
 1 0 0 1 54 665 Tm
 (1. What PrimeStock BMS Does) Tj
@@ -60,16 +59,14 @@ BT
 /F1 10 Tf
 1 0 0 1 54 455 Tm
 (- Smart Document Import & AI Copilot: Multi-table PDF/Excel import with conflict reconciliation.) Tj
-ET
 endstream
 endobj
 5 0 obj
 << /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 4 0 R >>
 endobj
 6 0 obj
-<< /Length 1397 >>
+<< /Length 1509 >>
 stream
-BT
 /F2 14 Tf
 1 0 0 1 54 745 Tm
 (3. Who Uses PrimeStock BMS & Role Permissions) Tj
@@ -103,10 +100,12 @@ BT
 /F1 10 Tf
 1 0 0 1 54 535 Tm
 (and full workspace JSON/CSV exports in Settings.) Tj
+/F1 10 Tf
+1 0 0 1 54 512 Tm
+(Official Portal: https://primestockug.com | Email Support: support@primestockug.com) Tj
 /F2 10 Tf
-1 0 0 1 54 500 Tm
+1 0 0 1 54 492 Tm
 (Built and maintained by Novic Technologies \(Republic of Uganda\).) Tj
-ET
 endstream
 endobj
 7 0 obj
@@ -122,12 +121,12 @@ xref
 0000000079 00000 n 
 0000000154 00000 n 
 0000000217 00000 n 
-0000002109 00000 n 
-0000002245 00000 n 
-0000003694 00000 n 
-0000003830 00000 n 
+0000002130 00000 n 
+0000002266 00000 n 
+0000003826 00000 n 
+0000003962 00000 n 
 trailer
 << /Size 9 /Root 8 0 R >>
 startxref
-3879
+4011
 %%EOF

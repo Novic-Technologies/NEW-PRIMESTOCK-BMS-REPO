@@ -21,6 +21,7 @@ import { computeTrialState } from '../utils/trialUtils';
 import { MASTER_ADMIN_EMAILS } from '../utils/masterAdmin';
 import { formatUGX } from '../utils/format';
 import { buildSubscriptionEmailHtml, sendTransactionalEmail } from '../services/notificationService';
+import { buildCanonicalAppUrl } from '../utils/domain';
 import { logWorkspaceAudit } from './useAuditLog';
 import { getHookCache, hasHookCache, setHookCache } from '../utils/hookCache';
 import toast from 'react-hot-toast';
@@ -264,7 +265,7 @@ export function useBilling() {
             message: `${tenant.name} submitted payment reference ${finalRef} via ${paymentMethod} for ${planLabel}. Review and unlock in the Master Console.`,
             planLabel: `${planLabel} (${formatUGX(amountUgx)})`,
             actionLabel: 'Open Master Console',
-            actionUrl: typeof window !== 'undefined' ? `${window.location.origin}/master` : undefined,
+            actionUrl: buildCanonicalAppUrl('/master'),
           }),
         }).catch(() => {});
       }

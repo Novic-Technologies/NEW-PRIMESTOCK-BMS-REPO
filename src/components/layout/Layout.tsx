@@ -123,7 +123,15 @@ export function Layout() {
                 }`}
           </span>
           <span className="font-medium text-text-secondary">
-            Built &amp; managed by <strong className="text-primary">Novic Technologies</strong>
+            <a
+              href="https://primestockug.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-accent transition-colors"
+            >
+              primestockug.com
+            </a>{' '}
+            · Built &amp; managed by <strong className="text-primary">Novic Technologies</strong>
           </span>
         </footer>
       </div>
