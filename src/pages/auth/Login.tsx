@@ -49,7 +49,7 @@ function GoogleLogo() {
 
 export default function Login() {
   const { loginWithGoogle, loginWithEmail, registerWithEmail, resetPassword } = useAuth();
-  const { user, isLoading, isAuthenticating, authError, clearAuthError } = useAuthStore();
+  const { user, isMasterAdmin, isLoading, isAuthenticating, authError, clearAuthError } = useAuthStore();
 
   const [mode, setMode] = useState<AuthMode>('signin');
   const [fullName, setFullName] = useState('');
@@ -76,7 +76,7 @@ export default function Login() {
     }
   }, []);
 
-  if (user) return <Navigate to={getDefaultRouteForUser(user)} replace />;
+  if (user) return <Navigate to={getDefaultRouteForUser(user, isMasterAdmin)} replace />;
 
   const isBusy = isLoading || isAuthenticating;
 
@@ -240,7 +240,18 @@ export default function Login() {
               className="mb-5 p-3.5 rounded-lg border border-danger/30 bg-danger/10 text-danger text-sm flex items-start gap-2.5"
             >
               <AlertCircle size={18} className="shrink-0 mt-0.5" />
-              <span>{legalError || authError}</span>
+              <div className="space-y-1.5">
+                <p>{legalError || authError}</p>
+                {mode === 'signin' && !legalError && authError && (
+                  <button
+                    type="button"
+                    onClick={() => switchMode('reset')}
+                    className="text-xs font-semibold underline underline-offset-2 text-danger hover:opacity-80 transition-opacity"
+                  >
+                    Reset password instead
+                  </button>
+                )}
+              </div>
             </div>
           )}
 

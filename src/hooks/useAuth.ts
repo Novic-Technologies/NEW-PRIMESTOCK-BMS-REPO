@@ -173,10 +173,27 @@ function getFirebaseErrorCode(error: unknown): string {
   return '';
 }
 
+const EXPECTED_USER_AUTH_CODES = new Set([
+  'auth/invalid-credential',
+  'auth/wrong-password',
+  'auth/user-not-found',
+  'auth/invalid-email',
+  'auth/missing-email',
+  'auth/email-already-in-use',
+  'auth/weak-password',
+  'auth/too-many-requests',
+  'auth/user-disabled',
+  'auth/popup-closed-by-user',
+  'auth/user-cancelled',
+  'auth/cancelled-popup-request',
+]);
+
 function mapAuthErrorMessage(code: string): string {
   switch (code) {
     case 'auth/popup-closed-by-user':
       return 'Google sign-in window was closed before completing. Click "Continue with Google" to try again.';
+    case 'auth/user-cancelled':
+      return 'Google sign-in was cancelled before completing. Click "Continue with Google" to try again.';
     case 'auth/cancelled-popup-request':
       return 'A previous sign-in request was replaced. Please complete the active sign-in window.';
     case 'auth/popup-blocked':
@@ -184,7 +201,7 @@ function mapAuthErrorMessage(code: string): string {
     case 'auth/invalid-credential':
     case 'auth/wrong-password':
     case 'auth/user-not-found':
-      return 'Invalid email or password. Please check your credentials and try again.';
+      return 'Invalid email or password. Double-check your details, reset your password below, or use "Continue with Google" if you registered with Google.';
     case 'auth/invalid-email':
       return 'Please enter a valid email address.';
     case 'auth/email-already-in-use':
@@ -864,7 +881,7 @@ export function useAuth() {
       const code = getFirebaseErrorCode(error);
       const message = mapAuthErrorMessage(code);
 
-      if (code === 'auth/popup-closed-by-user') {
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/user-cancelled') {
         setAuthError(message);
         toast(message, { icon: 'ℹ️' });
       } else if (code === 'auth/cancelled-popup-request') {
@@ -917,7 +934,9 @@ export function useAuth() {
     } catch (error) {
       const code = getFirebaseErrorCode(error);
       const message = mapAuthErrorMessage(code);
-      console.error('Email sign-in error:', code || error);
+      if (!EXPECTED_USER_AUTH_CODES.has(code)) {
+        console.error('Email sign-in error:', code || error);
+      }
       setAuthError(message);
       toast.error(message);
       return false;
@@ -989,7 +1008,9 @@ export function useAuth() {
       pendingSignupInfo = null;
       const code = getFirebaseErrorCode(error);
       const message = mapAuthErrorMessage(code);
-      console.error('Email registration error:', code || error);
+      if (!EXPECTED_USER_AUTH_CODES.has(code)) {
+        console.error('Email registration error:', code || error);
+      }
       setAuthError(message);
       toast.error(message);
       return { ok: false };
@@ -1028,7 +1049,9 @@ export function useAuth() {
           : code === 'auth/missing-email'
           ? 'Please enter your email address to receive a reset link.'
           : mapAuthErrorMessage(code);
-      console.error('Password reset error:', code || error);
+      if (!EXPECTED_USER_AUTH_CODES.has(code)) {
+        console.error('Password reset error:', code || error);
+      }
       setAuthError(message);
       toast.error(message);
       return false;
@@ -1122,8 +1145,8 @@ export function useAuth() {
       const msg =
         code === 'auth/wrong-password' || code === 'auth/invalid-credential'
           ? 'Incorrect password. Account deletion cancelled.'
-          : code === 'auth/popup-closed-by-user'
-          ? 'Verification window closed. Account deletion cancelled.'
+          : code === 'auth/popup-closed-by-user' || code === 'auth/user-cancelled'
+          ? 'Verification window closed or cancelled. Account deletion cancelled.'
           : 'Could not verify your identity. Please try again.';
       toast.error(msg);
       return { ok: false, error: msg };

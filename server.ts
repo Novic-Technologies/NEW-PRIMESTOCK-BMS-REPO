@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import http from 'http';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -4116,10 +4117,36 @@ async function startServer() {
     }
   });
 
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
+    const disableHmrWs = process.env.DISABLE_HMR === 'true' || Boolean(process.env.K_SERVICE);
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: disableHmrWs ? false : { server: httpServer },
+      },
+      plugins: disableHmrWs
+        ? [
+            {
+              name: 'disable-hmr-ws-client',
+              enforce: 'post',
+              transform(code: string, id: string) {
+                if (
+                  id.endsWith('/vite/dist/client/client.mjs') ||
+                  id.endsWith('\\vite\\dist\\client\\client.mjs')
+                ) {
+                  return code.replace(
+                    'transport.connect(createHMRHandler(handleMessage));',
+                    '/* HMR WebSocket disabled in preview runtime */'
+                  );
+                }
+                return undefined;
+              },
+            },
+          ]
+        : [],
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -4131,7 +4158,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`PrimeStock BMS server running on http://0.0.0.0:${PORT}`);
   });
 }
