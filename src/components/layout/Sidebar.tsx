@@ -329,7 +329,7 @@ export function Sidebar({ isOpen, onClose, isMinimized = false, onToggleMinimize
                     locked
                       ? 'text-white/40 hover:bg-white/5 cursor-pointer'
                       : isActive
-                      ? 'bg-white/14 text-white font-semibold border-l-2 border-accent shadow-xs'
+                      ? 'bg-white/14 text-white font-semibold ring-1 ring-white/15 shadow-xs'
                       : 'text-white/75 hover:text-white hover:bg-white/10'
                   )
                 }

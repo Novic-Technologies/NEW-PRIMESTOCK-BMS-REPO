@@ -15,7 +15,8 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth, db } from '../firebase';
 import { localDb } from '../services/db';
 import { useAuthStore } from '../store/authStore';
 import {
@@ -30,6 +31,7 @@ import {
   SubscriptionReminder,
   Tenant,
   TenantMember,
+  User,
 } from '../types';
 import { handleFirestoreError, OperationType } from '../utils/errorHandlers';
 import { stripUndefined } from '../utils/firestoreUtils';
@@ -1240,5 +1242,320 @@ export function useMasterAdmin() {
     savePlatformPlansConfig,
     fetchAllOrgUsageMetrics,
     deleteOrganizationWorkspace,
+  };
+}
+
+export function useMasterUsers() {
+  const { user: currentUser, isMasterAdmin } = useAuthStore();
+  const [users, setUsers] = useState<User[]>(
+    () => (isMasterAdmin ? getHookCache<User[]>('masterUsers', 'platform') ?? [] : [])
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () => (isMasterAdmin ? !hasHookCache('masterUsers', 'platform') : false)
+  );
+  const [isActing, setIsActing] = useState(false);
+
+  useEffect(() => {
+    if (!isMasterAdmin) {
+      setUsers([]);
+      setIsLoading(false);
+      return;
+    }
+
+    setUsers(getHookCache<User[]>('masterUsers', 'platform') ?? []);
+    setIsLoading(!hasHookCache('masterUsers', 'platform'));
+    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ uid: d.id, ...d.data() } as User));
+        setHookCache('masterUsers', 'platform', list);
+        setUsers(list);
+        setIsLoading(false);
+      },
+      (error) => {
+        setIsLoading(false);
+        try {
+          handleFirestoreError(error, OperationType.LIST, 'users');
+        } catch (structuredErr) {
+          console.error(structuredErr);
+        }
+        toast.error('Unable to load platform user accounts.');
+      }
+    );
+
+    return () => unsub();
+  }, [isMasterAdmin]);
+
+  const fetchTenantBranches = async (tenantId: string): Promise<Branch[]> => {
+    if (!isMasterAdmin || !tenantId || tenantId === 'platform') return [];
+    try {
+      const snap = await getDocs(collection(db, `tenants/${tenantId}/branches`));
+      return snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as Branch))
+        .sort((a, b) => (a.isDefault ? -1 : b.isDefault ? 1 : (a.name || '').localeCompare(b.name || '')));
+    } catch {
+      return [];
+    }
+  };
+
+  const updatePlatformUser = async (
+    targetUser: User,
+    updates: {
+      name?: string;
+      email?: string;
+      phone?: string | null;
+      role?: BusinessRole;
+      allowedSections?: AppSection[];
+      branchId?: string | null;
+      status?: 'active' | 'inactive';
+    }
+  ): Promise<boolean> => {
+    if (!currentUser || !isMasterAdmin || isActing) return false;
+
+    if (targetUser.uid === currentUser.uid && updates.status === 'inactive') {
+      toast.error('You cannot deactivate your own active Master Admin account.');
+      return false;
+    }
+
+    setIsActing(true);
+    try {
+      const userPayload: Record<string, unknown> = {};
+      const memberPayload: Record<string, unknown> = {};
+
+      if (updates.name !== undefined) {
+        const cleanName = updates.name.trim().slice(0, 120);
+        if (!cleanName) {
+          toast.error('Full name cannot be empty.');
+          return false;
+        }
+        userPayload.name = cleanName;
+        memberPayload.name = cleanName;
+      }
+
+      let normalizedNewEmail: string | undefined;
+      if (updates.email !== undefined) {
+        const cleanEmail = updates.email.trim().toLowerCase().slice(0, 254);
+        if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+          toast.error('Enter a valid email address.');
+          return false;
+        }
+        normalizedNewEmail = cleanEmail;
+        userPayload.email = cleanEmail;
+        memberPayload.email = cleanEmail;
+      }
+
+      if (updates.phone !== undefined) {
+        const cleanPhone = (updates.phone || '').trim().slice(0, 30);
+        if (cleanPhone) {
+          userPayload.phone = cleanPhone;
+          memberPayload.phone = cleanPhone;
+        } else {
+          userPayload.phone = deleteField();
+          memberPayload.phone = deleteField();
+        }
+      }
+
+      if (updates.role !== undefined) {
+        userPayload.role = updates.role;
+        memberPayload.role = updates.role;
+        if (updates.role === 'admin') {
+          userPayload.allowedSections = deleteField();
+          memberPayload.allowedSections = deleteField();
+        } else {
+          const nextSections =
+            updates.allowedSections && updates.allowedSections.length > 0
+              ? updates.allowedSections
+              : getDefaultSectionsForRole(updates.role);
+          userPayload.allowedSections = nextSections;
+          memberPayload.allowedSections = nextSections;
+        }
+      } else if (updates.allowedSections !== undefined && updates.allowedSections.length > 0) {
+        userPayload.allowedSections = updates.allowedSections;
+        memberPayload.allowedSections = updates.allowedSections;
+      }
+
+      if (updates.branchId !== undefined) {
+        if (updates.branchId) {
+          userPayload.branchId = updates.branchId;
+          memberPayload.branchId = updates.branchId;
+        } else {
+          userPayload.branchId = deleteField();
+          memberPayload.branchId = deleteField();
+        }
+      }
+
+      if (updates.status !== undefined) {
+        userPayload.status = updates.status;
+        memberPayload.status = updates.status;
+      }
+
+      if (Object.keys(userPayload).length === 0) {
+        return true;
+      }
+
+      await updateDoc(doc(db, 'users', targetUser.uid), userPayload);
+
+      if (targetUser.tenantId && targetUser.tenantId !== 'platform') {
+        const memberRef = doc(db, `tenants/${targetUser.tenantId}/members`, targetUser.uid);
+        const memberSnap = await getDoc(memberRef).catch(() => null);
+        if (memberSnap?.exists()) {
+          await updateDoc(memberRef, memberPayload);
+        }
+
+        // Keep business owner summary synced when modifying the workspace's admin owner
+        if (targetUser.role === 'admin') {
+          try {
+            const tenantRef = doc(db, 'tenants', targetUser.tenantId);
+            const tenantSnap = await getDoc(tenantRef);
+            if (tenantSnap.exists()) {
+              const tData = tenantSnap.data() as Tenant;
+              const tenantPatch: Record<string, unknown> = {};
+              if (
+                typeof userPayload.name === 'string' &&
+                (!tData.ownerName || tData.ownerName === targetUser.name)
+              ) {
+                tenantPatch.ownerName = userPayload.name;
+              }
+              if (
+                normalizedNewEmail &&
+                (!tData.ownerEmail ||
+                  tData.ownerEmail.trim().toLowerCase() === targetUser.email.trim().toLowerCase())
+              ) {
+                tenantPatch.ownerEmail = normalizedNewEmail;
+              }
+              if (
+                typeof userPayload.phone === 'string' &&
+                (!tData.ownerPhone || tData.ownerPhone === targetUser.phone)
+              ) {
+                tenantPatch.ownerPhone = userPayload.phone;
+              }
+              if (Object.keys(tenantPatch).length > 0) {
+                await updateDoc(tenantRef, tenantPatch);
+              }
+            }
+          } catch {
+            // Non-critical owner summary sync
+          }
+        }
+
+        const oldNormalizedEmail = (targetUser.email || '').trim().toLowerCase();
+        if (normalizedNewEmail && normalizedNewEmail !== oldNormalizedEmail) {
+          try {
+            const [newHash, oldHash] = await Promise.all([
+              hashEmailForRegistry(normalizedNewEmail),
+              oldNormalizedEmail ? hashEmailForRegistry(oldNormalizedEmail) : Promise.resolve(''),
+            ]);
+            const newRegRef = doc(db, 'emailRegistry', newHash);
+            const newRegSnap = await getDoc(newRegRef).catch(() => null);
+            if (!newRegSnap?.exists()) {
+              await setDoc(newRegRef, {
+                hash: newHash,
+                tenantId: targetUser.tenantId,
+                type: 'account',
+                createdAt: new Date().toISOString(),
+              });
+            }
+            if (oldHash) {
+              const oldRegRef = doc(db, 'emailRegistry', oldHash);
+              const oldRegSnap = await getDoc(oldRegRef).catch(() => null);
+              if (oldRegSnap?.exists() && oldRegSnap.data()?.tenantId === targetUser.tenantId) {
+                await deleteDoc(oldRegRef).catch(() => {});
+              }
+            }
+          } catch {
+            // Non-critical email registry sync
+          }
+        }
+      }
+
+      toast.success(`Updated account details for ${String(userPayload.name || targetUser.name)}`);
+      return true;
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.UPDATE, `users/${targetUser.uid}`);
+      } catch (structuredErr) {
+        console.error(structuredErr);
+      }
+      toast.error('Failed to update user account.');
+      return false;
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  const sendUserPasswordReset = async (email: string): Promise<boolean> => {
+    if (!currentUser || !isMasterAdmin || isActing) return false;
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      toast.error('No email address configured for this user.');
+      return false;
+    }
+    setIsActing(true);
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
+      toast.success(`Password reset email sent to ${cleanEmail}`);
+      return true;
+    } catch (error) {
+      console.error('Master password reset error:', error);
+      toast.error('Unable to send password reset email for this account.');
+      return false;
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  const deletePlatformUser = async (targetUser: User): Promise<boolean> => {
+    if (!currentUser || !isMasterAdmin || isActing) return false;
+
+    if (targetUser.uid === currentUser.uid || targetUser.tenantId === 'platform') {
+      toast.error('Platform owner accounts cannot be deleted from here.');
+      return false;
+    }
+
+    setIsActing(true);
+    try {
+      await deleteDoc(doc(db, 'users', targetUser.uid));
+
+      if (targetUser.tenantId) {
+        await deleteDoc(doc(db, `tenants/${targetUser.tenantId}/members`, targetUser.uid)).catch(() => {});
+      }
+
+      if (targetUser.email) {
+        try {
+          const emailHash = await hashEmailForRegistry(targetUser.email);
+          const regRef = doc(db, 'emailRegistry', emailHash);
+          const regSnap = await getDoc(regRef);
+          if (regSnap.exists() && regSnap.data()?.tenantId === targetUser.tenantId) {
+            await deleteDoc(regRef);
+          }
+        } catch {
+          // Ignore email registry cleanup failure
+        }
+      }
+
+      toast.success(`Removed account record for ${targetUser.name || targetUser.email}`);
+      return true;
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.DELETE, `users/${targetUser.uid}`);
+      } catch (structuredErr) {
+        console.error(structuredErr);
+      }
+      toast.error('Failed to remove user account record.');
+      return false;
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  return {
+    users,
+    isLoading,
+    isActing,
+    fetchTenantBranches,
+    updatePlatformUser,
+    sendUserPasswordReset,
+    deletePlatformUser,
   };
 }

@@ -256,10 +256,30 @@ export function useNotifications({
     firestoreItems.forEach((n) => {
       if (seenIds.has(n.id)) return;
       seenIds.add(n.id);
+
+      let displayTitle = n.title;
+      let displayMessage = n.message;
+
+      if (
+        n.id.startsWith('welcome_') &&
+        (/Welcome to .+'s Business/i.test(n.title) ||
+          /Your \d+-day free trial for .+'s Business/i.test(n.message) ||
+          /^Welcome [^!]+!\s*/i.test(n.message))
+      ) {
+        displayTitle = 'Welcome to PrimeStock Business Management System';
+        displayMessage = n.message
+          .replace(/^Welcome [^!]+!\s*/i, 'Welcome to PrimeStock Business Management System. ')
+          .replace(/for [^']+?'s Business\b/i, 'for your business')
+          .replace(
+            /Customize your logo, colors, and primary branch address/i,
+            'Update your business name, logo, colors, and branch details'
+          );
+      }
+
       combined.push({
         id: n.id,
-        title: n.title,
-        message: n.message,
+        title: displayTitle,
+        message: displayMessage,
         category: n.category,
         severity: n.severity,
         read: Boolean(n.read),

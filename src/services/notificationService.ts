@@ -18,15 +18,20 @@ export interface EmailServiceStatus {
 }
 
 export async function getNotificationServiceStatus(): Promise<EmailServiceStatus> {
-  const headers = await getAuthHeaders();
-  const res = await fetch('/api/notifications/email-status', {
-    method: 'GET',
-    headers,
-  });
-  if (!res.ok) {
+  try {
+    const headers = await getAuthHeaders();
+    const res = await fetch('/api/notifications/email-status', {
+      method: 'GET',
+      headers,
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok || !ct.includes('application/json')) {
+      return { configured: false, provider: 'none', whatsappConfigured: false };
+    }
+    return await res.json();
+  } catch {
     return { configured: false, provider: 'none', whatsappConfigured: false };
   }
-  return res.json();
 }
 
 export async function sendTransactionalEmail(params: {

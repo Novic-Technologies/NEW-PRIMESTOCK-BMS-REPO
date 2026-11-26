@@ -20,8 +20,6 @@ import {
   Mail,
   Trash2,
   ShieldCheck,
-  PanelLeftClose,
-  PanelLeftOpen,
   Sparkles,
   ArrowRight,
   X,
@@ -51,15 +49,11 @@ import { cn } from '../../lib/utils';
 interface TopBarProps {
   onMenuClick: () => void;
   onSyncNow?: () => void;
-  isSidebarMinimized?: boolean;
-  onToggleSidebarMinimize?: () => void;
 }
 
 export function TopBar({
   onMenuClick,
   onSyncNow,
-  isSidebarMinimized = false,
-  onToggleSidebarMinimize,
 }: TopBarProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -325,17 +319,6 @@ export function TopBar({
           >
             <Menu size={24} />
           </button>
-          {onToggleSidebarMinimize && (
-            <button
-              type="button"
-              onClick={onToggleSidebarMinimize}
-              aria-label={isSidebarMinimized ? 'Expand sidebar' : 'Minimize sidebar'}
-              title={isSidebarMinimized ? 'Expand sidebar' : 'Minimize sidebar'}
-              className="hidden lg:inline-flex p-2 text-text-secondary hover:text-primary hover:bg-surface-alt rounded-lg transition-colors"
-            >
-              {isSidebarMinimized ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
-            </button>
-          )}
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-white border border-border p-1 flex items-center justify-center shrink-0 overflow-hidden">
               <img
@@ -380,17 +363,6 @@ export function TopBar({
         >
           <Menu size={22} />
         </button>
-        {onToggleSidebarMinimize && (
-          <button
-            type="button"
-            onClick={onToggleSidebarMinimize}
-            aria-label={isSidebarMinimized ? 'Expand sidebar' : 'Minimize sidebar'}
-            title={isSidebarMinimized ? 'Expand sidebar' : 'Minimize sidebar'}
-            className="hidden lg:inline-flex p-2 text-text-secondary hover:text-primary hover:bg-surface-alt rounded-lg transition-colors shrink-0"
-          >
-            {isSidebarMinimized ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
-          </button>
-        )}
 
         <div className="relative hidden md:block" ref={searchContainerRef}>
           <Search

@@ -34,6 +34,7 @@ const Billing = lazy(routeLoaders.billing);
 const Settings = lazy(routeLoaders.settings);
 const MasterOverview = lazy(routeLoaders.masterOverview);
 const MasterMonitoring = lazy(routeLoaders.masterMonitoring);
+const MasterUsers = lazy(routeLoaders.masterUsers);
 const MasterApprovals = lazy(routeLoaders.masterApprovals);
 const MasterTiersUpgrades = lazy(routeLoaders.masterPlans);
 const MasterPaymentChannels = lazy(routeLoaders.masterPayments);
@@ -174,6 +175,14 @@ export default function App() {
               element={
                 <RouteSuspense variant="master">
                   <MasterMonitoring />
+                </RouteSuspense>
+              }
+            />
+            <Route
+              path="users"
+              element={
+                <RouteSuspense variant="master">
+                  <MasterUsers />
                 </RouteSuspense>
               }
             />

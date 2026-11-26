@@ -67,8 +67,6 @@ export function Layout() {
         <TopBar
           onMenuClick={() => setIsSidebarOpen(true)}
           onSyncNow={syncData}
-          isSidebarMinimized={isSidebarMinimized}
-          onToggleSidebarMinimize={handleToggleSidebarMinimize}
         />
         <TrialBanner />
         <main

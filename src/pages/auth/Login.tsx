@@ -63,6 +63,7 @@ export default function Login() {
   const [activeLegalModal, setActiveLegalModal] = useState<LegalDocType>(null);
   const [resetSent, setResetSent] = useState(false);
   const [signupSuccessEmail, setSignupSuccessEmail] = useState<string | null>(null);
+  const [signupPromptNotice, setSignupPromptNotice] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -85,23 +86,52 @@ export default function Login() {
     setLegalError(null);
     setResetSent(false);
     setSignupSuccessEmail(null);
+    setSignupPromptNotice(null);
     setMode(nextMode);
+  };
+
+  const redirectToSignup = (prefill: {
+    email?: string;
+    fullName?: string;
+    notice: string;
+  }) => {
+    clearAuthError();
+    setLegalError(null);
+    setResetSent(false);
+    setSignupSuccessEmail(null);
+    if (prefill.email) setEmail(prefill.email);
+    if (prefill.fullName) setFullName(prefill.fullName);
+    setSignupPromptNotice(prefill.notice);
+    setMode('signup');
   };
 
   const handleGoogleContinue = async () => {
     setLegalError(null);
+    setSignupPromptNotice(null);
     if (mode === 'signup') {
       if (!legalAccepted) {
         setLegalError('Please accept the Terms of Service and Privacy Policy before registering.');
         return;
       }
       await loginWithGoogle({
+        intent: 'signup',
+        fullName,
+        businessName,
         legalAcceptedAt: new Date().toISOString(),
         legalVersion: LEGAL_VERSION,
       });
       return;
     }
-    await loginWithGoogle();
+    const result = await loginWithGoogle({ intent: 'signin' });
+    if (result.needsSignup) {
+      redirectToSignup({
+        email: result.email,
+        fullName: result.fullName,
+        notice: `No workspace is registered for ${
+          result.email || 'this Google account'
+        } yet. Complete sign-up below before logging in.`,
+      });
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -110,6 +140,7 @@ export default function Login() {
 
     setResetSent(false);
     setSignupSuccessEmail(null);
+    setSignupPromptNotice(null);
     setLegalError(null);
 
     if (mode === 'signin') {
@@ -122,7 +153,16 @@ export default function Login() {
       } catch {
         // Ignore storage errors
       }
-      await loginWithEmail(email, password);
+      const result = await loginWithEmail(email, password);
+      if (result.needsSignup) {
+        redirectToSignup({
+          email: result.email || email.trim(),
+          fullName: result.fullName,
+          notice: `No account exists for ${
+            result.email || email.trim()
+          } yet. Complete your registration below before signing in.`,
+        });
+      }
       return;
     }
 
@@ -145,6 +185,7 @@ export default function Login() {
         setFullName('');
         setBusinessName('');
         setLegalAccepted(false);
+        setSignupPromptNotice(null);
         setMode('signin');
         setSignupSuccessEmail(result.email || email.trim());
       }
@@ -176,36 +217,62 @@ export default function Login() {
 
   return (
     <div className="min-h-screen flex items-stretch bg-canvas">
-      {/* Left Panel - Branding */}
-      <div className="hidden lg:flex lg:w-1/2 bg-[#0B1F3A] border-r border-white/10 p-12 flex-col justify-between relative overflow-hidden">
-        <div className="relative z-10">
-          <div className="mb-12">
-            <PrimeStockLogo variant="light" size="lg" showTagline />
+      {/* Left Panel - Desktop Branding Showcase (hidden on mobile/tablet) */}
+      <div className="hidden lg:flex lg:w-1/2 bg-[#0B1F3A] border-r border-white/10 p-12 xl:p-16 flex-col justify-between relative overflow-hidden">
+        <div className="relative z-10 flex items-center justify-between text-xs font-semibold tracking-wider uppercase text-slate-300/80">
+          <span>PRIMESTOCK BMS UG</span>
+          <span>Uganda Business Platform</span>
+        </div>
+
+        <div className="relative z-10 flex-1 flex flex-col items-center justify-center text-center max-w-lg mx-auto py-8">
+          <div className="w-28 h-28 xl:w-32 xl:h-32 rounded-3xl bg-white p-3.5 shadow-2xl ring-4 ring-white/15 flex items-center justify-center mb-6">
+            <img
+              src="/assets/aistudio/Minimalist_Navy_Monogram_Emblem_804982e2.png"
+              alt="PRIMESTOCK BMS UG logo"
+              className="w-full h-full object-contain"
+            />
           </div>
-          <h1 className="text-4xl xl:text-5xl font-bold text-white leading-tight max-w-md text-balance">
-            Manage Smarter. <br />
-            <span className="text-slate-300">Grow Faster.</span>
+
+          <div className="flex items-baseline justify-center gap-2">
+            <span className="text-3xl xl:text-4xl font-extrabold tracking-tight text-white">
+              PRIMESTOCK
+            </span>
+            <span className="text-xs xl:text-sm font-extrabold tracking-[0.22em] text-teal-300 uppercase">
+              BMS UG
+            </span>
+          </div>
+
+          <h1 className="text-3xl xl:text-4xl font-bold text-white leading-tight mt-6 text-balance">
+            Manage Smarter. <span className="text-slate-300">Grow Faster.</span>
           </h1>
-          <p className="text-slate-300/80 text-lg mt-6 max-w-sm leading-relaxed">
-            The professional, enterprise-grade management system built exclusively for Ugandan businesses.
-          </p>
-        </div>
 
-        <div className="relative z-10 space-y-2">
-          <div className="flex items-center gap-3 text-slate-300/75 text-sm">
-            <span>Offline-First</span>
-            <span aria-hidden="true">·</span>
-            <span>Multi-Tenant</span>
-            <span aria-hidden="true">·</span>
-            <span>URA EFRIS Ready</span>
+          <p className="text-slate-300/85 text-base mt-3 max-w-md leading-relaxed">
+            The unified point-of-sale, multi-branch inventory, accounting, and URA EFRIS platform built for Ugandan businesses.
+          </p>
+
+          <div className="grid grid-cols-3 gap-3 w-full mt-8 text-left">
+            <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3.5">
+              <p className="text-xs font-bold text-white">Offline-First POS</p>
+              <p className="text-[11px] text-slate-300/75 mt-1">Sell without interruption</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3.5">
+              <p className="text-xs font-bold text-white">Multi-Branch</p>
+              <p className="text-[11px] text-slate-300/75 mt-1">Real-time cloud sync</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3.5">
+              <p className="text-xs font-bold text-white">URA EFRIS Ready</p>
+              <p className="text-[11px] text-slate-300/75 mt-1">VAT, PAYE &amp; NSSF</p>
+            </div>
           </div>
-          <p className="text-xs text-slate-400">
-            Protected under the Uganda Data Protection and Privacy Act, 2019.
-          </p>
         </div>
 
-        <div className="absolute top-[-10%] right-[-10%] w-[55%] h-[55%] bg-white/[0.04] rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-[-20%] left-[-10%] w-[70%] h-[70%] bg-[#0F766E]/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="relative z-10 pt-4 border-t border-white/10 flex items-center justify-between gap-4 text-xs text-slate-400">
+          <span>Built &amp; managed by Novic Technologies</span>
+          <span>Uganda Data Protection Act, 2019</span>
+        </div>
+
+        <div className="absolute top-[-12%] right-[-10%] w-[55%] h-[55%] bg-white/[0.04] rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-[-20%] left-[-10%] w-[70%] h-[70%] bg-[#0F766E]/20 rounded-full blur-3xl pointer-events-none" />
       </div>
 
       {/* Right Panel - Auth Form */}
@@ -240,18 +307,43 @@ export default function Login() {
               className="mb-5 p-3.5 rounded-lg border border-danger/30 bg-danger/10 text-danger text-sm flex items-start gap-2.5"
             >
               <AlertCircle size={18} className="shrink-0 mt-0.5" />
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <p>{legalError || authError}</p>
                 {mode === 'signin' && !legalError && authError && (
-                  <button
-                    type="button"
-                    onClick={() => switchMode('reset')}
-                    className="text-xs font-semibold underline underline-offset-2 text-danger hover:opacity-80 transition-opacity"
-                  >
-                    Reset password instead
-                  </button>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        redirectToSignup({
+                          email: email.trim(),
+                          notice:
+                            'New to PrimeStock? Complete your business registration below before signing in.',
+                        })
+                      }
+                      className="text-xs font-bold underline underline-offset-2 text-primary hover:text-accent transition-colors"
+                    >
+                      New email? Sign up instead
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => switchMode('reset')}
+                      className="text-xs font-semibold underline underline-offset-2 text-danger hover:opacity-80 transition-opacity"
+                    >
+                      Reset password instead
+                    </button>
+                  </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {signupPromptNotice && mode === 'signup' && (
+            <div
+              role="status"
+              className="mb-5 p-3.5 rounded-lg border border-accent/30 bg-accent/10 text-primary text-sm flex items-start gap-2.5"
+            >
+              <AlertCircle size={18} className="shrink-0 mt-0.5 text-accent" />
+              <span>{signupPromptNotice}</span>
             </div>
           )}
 

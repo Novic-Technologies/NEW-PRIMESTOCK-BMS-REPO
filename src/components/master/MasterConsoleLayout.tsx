@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   Server,
   ShieldCheck,
+  Users,
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -29,6 +30,7 @@ import { ThemeToggleButton } from '../shared/ThemeToggleButton';
 const MASTER_NAV = [
   { label: 'Control Overview', path: '/master', icon: LayoutDashboard, end: true },
   { label: 'Business Monitoring', path: '/master/monitoring', icon: Activity },
+  { label: 'All User Accounts', path: '/master/users', icon: Users },
   { label: 'Upgrade Approvals', path: '/master/approvals', icon: CheckCircle2 },
   { label: 'Tiers & Upgrade Paths', path: '/master/plans', icon: Layers },
   { label: 'Payment Channels', path: '/master/payments', icon: CreditCard },
@@ -161,7 +163,7 @@ export function MasterConsoleLayout() {
                   'relative flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors whitespace-nowrap',
                   isMinimized && 'lg:justify-center lg:px-0',
                   isActive
-                    ? 'bg-white/14 text-white font-semibold border-l-2 border-[#0F766E]'
+                    ? 'bg-white/14 text-white font-semibold ring-1 ring-white/15'
                     : 'text-slate-300 hover:text-white hover:bg-white/10'
                 )
               }
@@ -184,12 +186,12 @@ export function MasterConsoleLayout() {
           ))}
         </nav>
 
-        <div className={cn('p-4 border-t border-slate-800 space-y-3', isMinimized && 'lg:p-2.5')}>
+        <div className={cn('p-4 border-t border-white/10 space-y-3', isMinimized && 'lg:p-2.5')}>
           <PWAInstallButton compact={false} iconOnly={isMinimized} />
           <div
             title={`${user?.name || 'Master Owner'} · ${user?.email || ''}`}
             className={cn(
-              'px-3 py-2.5 rounded-lg bg-slate-800/70 border border-slate-700/60',
+              'px-3 py-2.5 rounded-lg bg-white/8 border border-white/10',
               isMinimized && 'lg:px-0 lg:py-2 lg:flex lg:items-center lg:justify-center'
             )}
           >
@@ -200,7 +202,7 @@ export function MasterConsoleLayout() {
             ) : null}
             <div className={cn(isMinimized && 'lg:hidden')}>
               <p className="text-xs font-semibold text-white truncate">{user?.name || 'Master Owner'}</p>
-              <p className="text-[11px] text-slate-400 truncate">{user?.email}</p>
+              <p className="text-[11px] text-white/60 truncate">{user?.email}</p>
             </div>
           </div>
           <button
@@ -209,14 +211,14 @@ export function MasterConsoleLayout() {
             aria-label="Sign Out"
             onClick={handleLogout}
             className={cn(
-              'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-slate-800 transition-colors whitespace-nowrap',
+              'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-white/75 hover:text-white hover:bg-white/10 transition-colors whitespace-nowrap',
               isMinimized && 'lg:justify-center lg:px-0'
             )}
           >
             <LogOut size={16} />
             <span className={cn(isMinimized && 'lg:hidden')}>Sign Out</span>
           </button>
-          <p className={cn('text-[10px] text-slate-500 text-center', isMinimized && 'lg:hidden')}>
+          <p className={cn('text-[10px] text-white/45 text-center', isMinimized && 'lg:hidden')}>
             Novic Technologies · System Control
           </p>
         </div>
@@ -226,16 +228,6 @@ export function MasterConsoleLayout() {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="bg-surface/95 backdrop-blur-sm border-b border-border px-4 md:px-8 h-16 flex items-center justify-between gap-4 sticky top-0 z-30">
           <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={handleToggleMinimize}
-              title={isMinimized ? 'Expand sidebar' : 'Minimize sidebar'}
-              aria-label={isMinimized ? 'Expand sidebar' : 'Minimize sidebar'}
-              aria-expanded={!isMinimized}
-              className="hidden lg:inline-flex p-2 rounded-lg border border-border text-text-primary hover:bg-surface-alt"
-            >
-              {isMinimized ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-            </button>
             <button
               type="button"
               onClick={() => setMobileOpen(true)}

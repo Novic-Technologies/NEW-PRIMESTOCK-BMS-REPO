@@ -717,8 +717,10 @@ service cloud.firestore {
            incoming().role == existing().role &&
            incoming().status == existing().status &&
            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'branchId'])) ||
-          ((isTenantAdmin(existing().tenantId) || isMasterAdmin()) &&
-           incoming().diff(existing()).affectedKeys().hasOnly(['role', 'allowedSections', 'branchId', 'status']))
+          (isTenantAdmin(existing().tenantId) &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['role', 'allowedSections', 'branchId', 'status'])) ||
+          (isMasterAdmin() &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'role', 'allowedSections', 'branchId', 'status']))
         );
     }
 

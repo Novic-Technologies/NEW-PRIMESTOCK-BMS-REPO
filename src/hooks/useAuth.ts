@@ -53,6 +53,11 @@ interface PendingSignupInfo {
   legalVersion?: string;
 }
 
+type SyncOutcome =
+  | { status: 'authenticated' }
+  | { status: 'needs_signup'; email: string; fullName: string }
+  | { status: 'error' };
+
 interface CachedSession {
   user: User;
   tenant: Tenant | null;
@@ -66,7 +71,7 @@ let googlePopupInFlight = false;
 let emailAuthInFlight = false;
 let registrationSignOutPending = false;
 let pendingSignupInfo: PendingSignupInfo | null = null;
-const profileSyncInFlight = new Map<string, Promise<void>>();
+const profileSyncInFlight = new Map<string, Promise<SyncOutcome>>();
 
 const ALL_TENANT_SUBCOLLECTIONS = [
   'products',
@@ -243,16 +248,16 @@ async function ensureEmailRegistryEntry(email: string, tenantId: string) {
 
 async function syncAuthenticatedUser(
   firebaseUser: FirebaseUser,
-  options?: { commitToStore?: boolean }
-): Promise<boolean> {
+  options?: { commitToStore?: boolean; requireExistingProfile?: boolean }
+): Promise<SyncOutcome> {
   const commitToStore = options?.commitToStore ?? true;
+  const requireExistingProfile = options?.requireExistingProfile ?? false;
   const existingPromise = profileSyncInFlight.get(firebaseUser.uid);
   if (existingPromise) {
-    await existingPromise;
-    return true;
+    return existingPromise;
   }
 
-  const syncTask = (async () => {
+  const syncTask: Promise<SyncOutcome> = (async (): Promise<SyncOutcome> => {
     const { setUser, setTenant, setActiveBranchId, setMasterAdmin, setAuthError, logout } =
       useAuthStore.getState();
     const userPath = `users/${firebaseUser.uid}`;
@@ -304,7 +309,7 @@ async function syncAuthenticatedUser(
         isMasterAdmin: true,
       });
       pendingSignupInfo = null;
-      return;
+      return { status: 'authenticated' };
     }
 
     if (!userDocResult.ok) {
@@ -318,7 +323,7 @@ async function syncAuthenticatedUser(
         setAuthError('Failed to load your account profile from Firestore.');
         toast.error('Failed to load user profile');
       }
-      return;
+      return { status: 'error' };
     }
 
     const userDoc = userDocResult.docSnap;
@@ -332,7 +337,7 @@ async function syncAuthenticatedUser(
         logout();
         setAuthError('Your account has been deactivated by your workspace administrator.');
         toast.error('Account deactivated. Contact your workspace administrator.');
-        return;
+        return { status: 'error' };
       }
 
       const prevUid = (() => {
@@ -378,6 +383,13 @@ async function syncAuthenticatedUser(
             tenant: loadedTenant,
             isMasterAdmin: isMaster,
           });
+        } else {
+          clearCachedSession(firebaseUser.uid);
+          setTenant(null);
+          applyTenantTheme(null);
+          if (commitToStore) {
+            setAuthError('Your business workspace could not be found or has been removed.');
+          }
         }
       } catch (error) {
         try {
@@ -420,7 +432,7 @@ async function syncAuthenticatedUser(
       })();
 
       pendingSignupInfo = null;
-      return;
+      return { status: 'authenticated' };
     }
 
     // Check if this user has a pending team invitation for an existing workspace
@@ -521,11 +533,25 @@ async function syncAuthenticatedUser(
             setAuthError(null);
             toast.success(`Joined ${invite.tenantName} as ${invite.role}!`);
           }
-          return;
+          return { status: 'authenticated' };
         }
       } catch (inviteErr) {
         console.warn('Staff invite check skipped:', inviteErr);
       }
+    }
+
+    // If signing in (or restoring session) with an unregistered account, never auto-provision a workspace
+    if (requireExistingProfile) {
+      const email = (firebaseUser.email || '').trim();
+      const fullName = (firebaseUser.displayName || '').trim();
+      clearCachedSession(firebaseUser.uid);
+      clearAllHookCaches();
+      resetWarmedHookScopes();
+      await clearAllLocalData().catch(() => {});
+      await signOut(auth).catch(() => {});
+      applyTenantTheme(null);
+      logout();
+      return { status: 'needs_signup', email, fullName };
     }
 
     // New business workspace registration: first account is ALWAYS 'admin' with full business access
@@ -533,10 +559,11 @@ async function syncAuthenticatedUser(
       signupMeta?.fullName?.trim() ||
       firebaseUser.displayName?.trim() ||
       firebaseUser.email?.split('@')[0] ||
-      'New User'
+      'Business Owner'
     ).slice(0, 120);
+    const hasExplicitBusinessName = Boolean(signupMeta?.businessName?.trim());
     const businessName = (
-      signupMeta?.businessName?.trim() || `${displayName}'s Business`
+      signupMeta?.businessName?.trim() || 'My Business'
     ).slice(0, 150);
 
     const newTenantId = crypto.randomUUID();
@@ -639,7 +666,7 @@ async function syncAuthenticatedUser(
           tenant: newTenant,
           isMasterAdmin: isMaster,
         });
-        toast.success(`Welcome to PRIMESTOCK BMS! Your ${trialDays}-day free trial has started.`);
+        toast.success(`Welcome to PrimeStock Business Management System! Your ${trialDays}-day free trial has started.`);
       }
 
       const regAuditId = crypto.randomUUID();
@@ -658,13 +685,15 @@ async function syncAuthenticatedUser(
       }).catch(() => {});
 
       const welcomeNotifId = `welcome_${newTenantId.slice(0, 8)}`;
-      const welcomeMsg = `Welcome ${displayName}! Your ${trialDays}-day free trial for ${businessName} runs until ${formatDate(
+      const welcomeMsg = `Welcome to PrimeStock Business Management System. Your ${trialDays}-day free trial for ${
+        hasExplicitBusinessName ? businessName : 'your business'
+      } runs until ${formatDate(
         newTenant.trialEndsAt
-      )}. Customize your logo, colors, and primary branch address anytime in Settings and Team & Branches.`;
+      )}. Update your business name, logo, colors, and branch details anytime in Settings and Team & Branches.`;
       const welcomeNotif: AppNotification = {
         id: welcomeNotifId,
         tenantId: newTenantId,
-        title: `Welcome to ${businessName}`,
+        title: 'Welcome to PrimeStock Business Management System',
         message: welcomeMsg,
         category: 'system',
         severity: 'info',
@@ -680,13 +709,15 @@ async function syncAuthenticatedUser(
       if (firebaseUser.email) {
         sendTransactionalEmail({
           to: firebaseUser.email,
-          subject: `Welcome to PrimeStock BMS — ${businessName} (${trialDays}-Day Free Trial)`,
+          subject: `Welcome to PrimeStock Business Management System (${trialDays}-Day Free Trial)`,
           text: `${welcomeMsg}\n\nWorkspace URL: ${
             typeof window !== 'undefined' ? window.location.origin : ''
           }`,
           html: buildSubscriptionEmailHtml({
-            businessName,
-            headline: `Your ${trialDays}-Day Free Trial Has Started`,
+            businessName: hasExplicitBusinessName
+              ? businessName
+              : 'PrimeStock Business Management System',
+            headline: 'Welcome to PrimeStock Business Management System',
             message: welcomeMsg,
             planLabel: `${defaultQuota.name} (${trialDays}-Day Free Trial)`,
             expiryLabel: formatDate(newTenant.trialEndsAt),
@@ -696,6 +727,7 @@ async function syncAuthenticatedUser(
           }),
         }).catch(() => {});
       }
+      return { status: 'authenticated' };
     } catch (error) {
       try {
         handleFirestoreError(error, OperationType.CREATE, `tenants/${newTenantId}`);
@@ -704,14 +736,14 @@ async function syncAuthenticatedUser(
       }
       setAuthError('Account authenticated, but workspace provisioning failed.');
       toast.error('Failed to set up business workspace');
+      return { status: 'error' };
     }
   })().finally(() => {
     profileSyncInFlight.delete(firebaseUser.uid);
   });
 
   profileSyncInFlight.set(firebaseUser.uid, syncTask);
-  await syncTask;
-  return !useAuthStore.getState().authError;
+  return syncTask;
 }
 
 export function useAuthObserver() {
@@ -721,7 +753,7 @@ export function useAuthObserver() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
-        if (registrationSignOutPending) {
+        if (registrationSignOutPending || googlePopupInFlight || emailAuthInFlight) {
           return;
         }
         if (firebaseUser) {
@@ -733,9 +765,9 @@ export function useAuthObserver() {
             setActiveBranchId(cached.user.branchId || null);
             applyTenantTheme(cached.tenant);
             setLoading(false);
-            void syncAuthenticatedUser(firebaseUser);
+            void syncAuthenticatedUser(firebaseUser, { requireExistingProfile: !pendingSignupInfo });
           } else {
-            await syncAuthenticatedUser(firebaseUser);
+            await syncAuthenticatedUser(firebaseUser, { requireExistingProfile: !pendingSignupInfo });
           }
         } else {
           clearCachedSession(useAuthStore.getState().user?.uid);
@@ -781,6 +813,8 @@ export function useAuthObserver() {
           latest.role !== user.role ||
           latest.branchId !== user.branchId ||
           latest.name !== user.name ||
+          (latest.phone || '') !== (user.phone || '') ||
+          (latest.email || '') !== (user.email || '') ||
           sectionsChanged
         ) {
           setUser(latest);
@@ -806,6 +840,8 @@ export function useAuthObserver() {
     user?.role,
     user?.branchId,
     user?.name,
+    user?.phone,
+    user?.email,
     user?.allowedSections,
     logout,
     setUser,
@@ -844,25 +880,43 @@ export function useAuth() {
   const { setAuthenticating, setAuthError, clearAuthError, logout } = useAuthStore();
 
   const loginWithGoogle = async (options?: {
+    intent?: 'signin' | 'signup';
+    fullName?: string;
+    businessName?: string;
     legalAcceptedAt?: string;
     legalVersion?: string;
-  }) => {
-    if (googlePopupInFlight || emailAuthInFlight) return;
+  }): Promise<{ ok: boolean; needsSignup?: boolean; email?: string; fullName?: string }> => {
+    if (googlePopupInFlight || emailAuthInFlight) return { ok: false };
+    const intent = options?.intent || (options?.legalAcceptedAt ? 'signup' : 'signin');
     googlePopupInFlight = true;
     clearAuthError();
     setAuthenticating(true);
-    if (options?.legalAcceptedAt) {
+    if (intent === 'signup') {
       pendingSignupInfo = {
-        legalAcceptedAt: options.legalAcceptedAt,
-        legalVersion: options.legalVersion || '2026-11',
+        fullName: options?.fullName?.trim() || undefined,
+        businessName: options?.businessName?.trim() || undefined,
+        legalAcceptedAt: options?.legalAcceptedAt || new Date().toISOString(),
+        legalVersion: options?.legalVersion || '2026-11',
       };
+    } else {
+      pendingSignupInfo = null;
     }
 
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       const credential = await signInWithPopup(auth, provider);
-      await syncAuthenticatedUser(credential.user);
+      const outcome = await syncAuthenticatedUser(credential.user, {
+        requireExistingProfile: intent === 'signin',
+      });
+      if (outcome.status === 'needs_signup') {
+        return {
+          ok: false,
+          needsSignup: true,
+          email: outcome.email,
+          fullName: outcome.fullName,
+        };
+      }
       const signedInUser = useAuthStore.getState().user;
       if (signedInUser && signedInUser.tenantId !== 'platform') {
         void logWorkspaceAudit({
@@ -877,7 +931,9 @@ export function useAuth() {
           summary: `${signedInUser.name} (${signedInUser.role}) signed in with Google`,
         });
       }
+      return { ok: outcome.status === 'authenticated' };
     } catch (error) {
+      pendingSignupInfo = null;
       const code = getFirebaseErrorCode(error);
       const message = mapAuthErrorMessage(code);
 
@@ -891,19 +947,23 @@ export function useAuth() {
         setAuthError(message);
         toast.error(message);
       }
+      return { ok: false };
     } finally {
       googlePopupInFlight = false;
       setAuthenticating(false);
     }
   };
 
-  const loginWithEmail = async (email: string, password: string): Promise<boolean> => {
-    if (googlePopupInFlight || emailAuthInFlight) return false;
+  const loginWithEmail = async (
+    email: string,
+    password: string
+  ): Promise<{ ok: boolean; needsSignup?: boolean; email?: string; fullName?: string; errorCode?: string }> => {
+    if (googlePopupInFlight || emailAuthInFlight) return { ok: false };
     const trimmedEmail = email.trim();
     if (!trimmedEmail || !password) {
       const msg = 'Please enter both your email address and password.';
       setAuthError(msg);
-      return false;
+      return { ok: false };
     }
 
     emailAuthInFlight = true;
@@ -912,7 +972,17 @@ export function useAuth() {
 
     try {
       const credential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
-      await syncAuthenticatedUser(credential.user);
+      const outcome = await syncAuthenticatedUser(credential.user, {
+        requireExistingProfile: true,
+      });
+      if (outcome.status === 'needs_signup') {
+        return {
+          ok: false,
+          needsSignup: true,
+          email: outcome.email || trimmedEmail,
+          fullName: outcome.fullName,
+        };
+      }
       const signedInUser = useAuthStore.getState().user;
       if (signedInUser) {
         if (signedInUser.tenantId !== 'platform') {
@@ -928,18 +998,21 @@ export function useAuth() {
             summary: `${signedInUser.name} (${signedInUser.role}) signed in with email`,
           });
         }
-        return true;
+        return { ok: true };
       }
-      return false;
+      return { ok: false };
     } catch (error) {
       const code = getFirebaseErrorCode(error);
+      if (code === 'auth/user-not-found') {
+        return { ok: false, needsSignup: true, email: trimmedEmail, errorCode: code };
+      }
       const message = mapAuthErrorMessage(code);
       if (!EXPECTED_USER_AUTH_CODES.has(code)) {
         console.error('Email sign-in error:', code || error);
       }
       setAuthError(message);
       toast.error(message);
-      return false;
+      return { ok: false, errorCode: code };
     } finally {
       emailAuthInFlight = false;
       setAuthenticating(false);
@@ -990,7 +1063,10 @@ export function useAuth() {
       void updateProfile(credential.user, { displayName: fullName }).catch(() => {});
       void sendEmailVerification(credential.user).catch(() => {});
 
-      const provisioned = await syncAuthenticatedUser(credential.user, { commitToStore: false });
+      const outcome = await syncAuthenticatedUser(credential.user, {
+        commitToStore: false,
+        requireExistingProfile: false,
+      });
       clearCachedSession(credential.user.uid);
       clearAllHookCaches();
       resetWarmedHookScopes();
@@ -999,7 +1075,7 @@ export function useAuth() {
       applyTenantTheme(null);
       logout();
 
-      if (!provisioned) {
+      if (outcome.status !== 'authenticated') {
         return { ok: false };
       }
       toast.success('Account created! Please sign in to access your workspace.');

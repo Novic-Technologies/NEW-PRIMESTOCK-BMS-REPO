@@ -11,6 +11,7 @@ import {
   Layers,
   Lock,
   TrendingUp,
+  Users,
 } from 'lucide-react';
 import { useMasterAdmin } from '../../hooks/useMasterAdmin';
 import { getPlanQuota } from '../../utils/planLimits';
@@ -95,6 +96,10 @@ export default function MasterOverview() {
           <Link to="/master/monitoring" className="btn btn-secondary text-xs gap-1.5 whitespace-nowrap">
             <Activity size={15} />
             Business Monitoring
+          </Link>
+          <Link to="/master/users" className="btn btn-secondary text-xs gap-1.5 whitespace-nowrap">
+            <Users size={15} />
+            All User Accounts
           </Link>
           <Link to="/master/plans" className="btn btn-primary text-xs gap-1.5 whitespace-nowrap">
             <Layers size={15} />

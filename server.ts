@@ -4137,10 +4137,19 @@ async function startServer() {
                   id.endsWith('/vite/dist/client/client.mjs') ||
                   id.endsWith('\\vite\\dist\\client\\client.mjs')
                 ) {
-                  return code.replace(
-                    'transport.connect(createHMRHandler(handleMessage));',
-                    '/* HMR WebSocket disabled in preview runtime */'
-                  );
+                  return code
+                    .replace(
+                      'transport.connect(createHMRHandler(handleMessage));',
+                      '/* HMR WebSocket disabled in preview runtime */'
+                    )
+                    .replace(
+                      'throw new Error("send was called before connect");',
+                      'return;'
+                    )
+                    .replace(
+                      'throw new Error("invoke was called before connect");',
+                      'return;'
+                    );
                 }
                 return undefined;
               },

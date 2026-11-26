@@ -1,0 +1,133 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+3 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R] /Count 2 >>
+endobj
+4 0 obj
+<< /Length 1840 >>
+stream
+BT
+/F2 20 Tf
+1 0 0 1 54 745 Tm
+(PRIMESTOCK BMS UG) Tj
+/F1 11 Tf
+1 0 0 1 54 722 Tm
+(Enterprise Multi-Tenant Business Management & URA Compliance System) Tj
+/F1 10 Tf
+1 0 0 1 54 705 Tm
+(Complete System Manual, Feature Reference & Role Guide) Tj
+/F2 14 Tf
+1 0 0 1 54 665 Tm
+(1. What PrimeStock BMS Does) Tj
+/F1 10 Tf
+1 0 0 1 54 645 Tm
+(PrimeStock BMS is an offline-first, multi-branch business management suite built for Ugandan merchants,) Tj
+/F1 10 Tf
+1 0 0 1 54 630 Tm
+(pharmacies, supermarkets, hardware stores, and wholesalers. All POS sales, stock movements, and shifts) Tj
+/F1 10 Tf
+1 0 0 1 54 615 Tm
+(persist locally in IndexedDB during internet outages and sync automatically once connectivity returns.) Tj
+/F2 14 Tf
+1 0 0 1 54 580 Tm
+(2. Core Business Modules) Tj
+/F1 10 Tf
+1 0 0 1 54 560 Tm
+(- Point of Sale \(POS\): Mobile-ready cart, barcode/camera scan, split tenders \(Cash, MTN MoMo, Airtel,) Tj
+/F1 10 Tf
+1 0 0 1 54 545 Tm
+(  Card, Credit\), loyalty points redemption, FEFO batch lot selection, held carts, & thermal printing.) Tj
+/F1 10 Tf
+1 0 0 1 54 530 Tm
+(- Inventory & Multi-Branch Control: Per-batch lot/expiry tracking, two-step in-transit stock transfers,) Tj
+/F1 10 Tf
+1 0 0 1 54 515 Tm
+(  variance audits, reorder alerts, and multi-currency Purchase Orders \(UGX / USD / KES\).) Tj
+/F1 10 Tf
+1 0 0 1 54 500 Tm
+(- Customers, Suppliers & Credit Ledgers: Partial repayments, credit limits, and statement tracking.) Tj
+/F1 10 Tf
+1 0 0 1 54 485 Tm
+(- Finance & Uganda Statutory Payroll: Expenses, PAYE tax brackets, 5% employee / 10% employer NSSF,) Tj
+/F1 10 Tf
+1 0 0 1 54 470 Tm
+(- URA VAT & EFRIS Readiness: 18% inclusive/exclusive VAT calculations, TIN validation, & FDN receipts.) Tj
+/F1 10 Tf
+1 0 0 1 54 455 Tm
+(- Smart Document Import & AI Copilot: Multi-table PDF/Excel import with conflict reconciliation.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 1397 >>
+stream
+BT
+/F2 14 Tf
+1 0 0 1 54 745 Tm
+(3. Who Uses PrimeStock BMS & Role Permissions) Tj
+/F1 10 Tf
+1 0 0 1 54 722 Tm
+(- Master Platform Owner: Governs all merchant workspaces, approves plan upgrades, manages) Tj
+/F1 10 Tf
+1 0 0 1 54 707 Tm
+(  payment channels, monitors quotas, runs automated expiry sweeps, and audits/modifies all user logins.) Tj
+/F1 10 Tf
+1 0 0 1 54 687 Tm
+(- Business Administrator: Full control over their workspace, team invites, staff PINs, branding, & billing.) Tj
+/F1 10 Tf
+1 0 0 1 54 667 Tm
+(- Branch Manager: Oversees daily POS, sales refunds, inventory, purchase orders, shifts, & reports.) Tj
+/F1 10 Tf
+1 0 0 1 54 647 Tm
+(- Cashier: Operates fast mobile/desktop POS checkout, sales counter, finance counter, & cash shifts.) Tj
+/F1 10 Tf
+1 0 0 1 54 627 Tm
+(- Finance / Accountant: Manages expenses, supplier/customer settlements, PAYE/NSSF payroll, & reports.) Tj
+/F1 10 Tf
+1 0 0 1 54 607 Tm
+(- Inventory / Storekeeper: Manages SKUs, stocktake adjustments, branch transfers, & goods receiving.) Tj
+/F2 14 Tf
+1 0 0 1 54 570 Tm
+(4. Security, Backups & Support) Tj
+/F1 10 Tf
+1 0 0 1 54 550 Tm
+(Protected by strict tenant isolation rules, verified identity checks, Light/Dark theme support,) Tj
+/F1 10 Tf
+1 0 0 1 54 535 Tm
+(and full workspace JSON/CSV exports in Settings.) Tj
+/F2 10 Tf
+1 0 0 1 54 500 Tm
+(Built and maintained by Novic Technologies \(Republic of Uganda\).) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Type /Catalog /Pages 3 0 R >>
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000009 00000 n 
+0000000079 00000 n 
+0000000154 00000 n 
+0000000217 00000 n 
+0000002109 00000 n 
+0000002245 00000 n 
+0000003694 00000 n 
+0000003830 00000 n 
+trailer
+<< /Size 9 /Root 8 0 R >>
+startxref
+3879
+%%EOF
